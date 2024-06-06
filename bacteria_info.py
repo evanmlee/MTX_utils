@@ -2,6 +2,9 @@ import os, re
 import pandas as pd 
 from importlib import resources as impresources
 from Bio import SeqIO
+import matplotlib.pyplot as plt 
+import seaborn as sns 
+from MTX_utils import MTX_colors
 from . import refs
 
 ###====================================================================================###
@@ -15,6 +18,17 @@ def load_bacteria_info(bacteria_fname="MG02_bacteria_info.csv",sep=','):
 	# for col in bacteria_info: #Strip whitespace 
 		# bacteria_info[col] = bacteria_info[col].str.strip()
 	return bacteria_info
+
+def load_mcSEED_phenotype_pathway_info(phenotypes_fpath='mcSEED_phenotype_pathway_codes.csv'):
+	#@param phenotypes_fname: Either path to a table containing phenotype/pathway codes or defaults to a filename in 
+	#MTX_utils/refs
+	if not os.path.exists(phenotypes_fpath):
+		phenotypes_fpath = (impresources.files(refs) / phenotypes_fpath)
+	if not os.path.exists(phenotypes_fpath):
+		raise ValueError("Could not find a file for phenotypes_fpath. Make sure it exists at the specified location, or use default value and file in MTX_utils/refs.")
+	mcSEED_phenotype_df = pd.read_csv(phenotypes_fpath,index_col=0)
+	mcSEED_phenotype_df['Functional pathway'] = mcSEED_phenotype_df['Functional pathway'].str.capitalize()
+	return mcSEED_phenotype_df
 
 def convert_mcSEED_from_module_format(mcSEED,standardize_categories=False,retain_max_phenotype=True):
 	#Rename columns which are identical in content between the two formats
@@ -45,65 +59,148 @@ def convert_mcSEED_from_module_format(mcSEED,standardize_categories=False,retain
 	mcSEED = mcSEED[pathway_format_column_order]
 	return mcSEED
 
-def _fix_phenotypes_from_pathways(mcSEED):
-	"""TODO: finish this - mcSEED annotations are impossible to parse 
-	Helper function to fix discrepancies between 'Functional pathway' and 'Phenotype' columns present in 
-	P. copri datasets - locus tags which have multiple mcSEED annotations will only have one phenotype value 
-	sometimes representing multiple different Functional pathway values. Similarly, some single pathway values 
-	have corresponding semicolon separated lists of phenotypes.  
+def _fix_phenotypes_and_pathways(mcSEED, mcSEED_phenotype_df):
+	"""mcSEED annotations for P. copri do not have matched entries for the columns Functional pathway and Phenotype 
+	- it's possible for one or both of these columns to have semicolon separated lists 
+	that are not matched one to one between these two columns.
 
-	Requires mcSEED to be indexed on locus tags. 
+	To handle discrepancies, this function generates a list of problem locus tags: 
+	#1. Those with a semicolon in the list of phenotypes. In this case, each phenotype will be mapped via 
+	mcSEED_phenotype_df to corresponding pathways (if possible) and a semicolon separated list of 
+	pathway names will be substituted for the corresponding Functional pathway entry
+	#2. Those with semicolon-separated list of functional pathways. Phenotype will be replaced with a 
+	semicolon separated list of their corresponding Phenotpye abbreviations
+	#3. Those with multiple annotations per locus tag: get flattened list of associated phenotypes across
+	all rows, get matching list of pathway entries and overwrite both Phenotype and Functional pathway for 
+	all annotations associated with this locus tag.
+
+	Note that this function will not deduplicate locus tags/ collapse annotations across rows into one row for 
+	each locus tag, but it will generate a formatted version of mcSEED annotations that should be compatible 
+	for doing so.  
+
+	@param mcSEED: pd.DataFrame, required. mcSEED must be indexed on locus tags in order to handle loci with 
+	multiple annotations associated with them. 
+	@param mcSEED_phenotype_df: pd.DataFrame, required. DataFrame indexed on Phenotype pathway abbreviations 
+	(corresponding to entries in Phenotype in mcSEED) and containing Functional pathway and Functional category 
+	columns. Used to map entries in these columns in mcSEED to fill in missing values. 
 	"""
 	mcSEED_locus_vc = mcSEED.index.value_counts()
 	#single entries - should have only one annotation per locus tag and also exclude entries 
 	#which have comma separated lists in Phenotype and Functional pathway
-	mcSEED_single_entries = mcSEED.loc[(mcSEED_locus_vc[mcSEED.index]==1) & \
-										~(mcSEED['Phenotype'].str.contains(';')) &\
-										~(mcSEED['Functional pathway'].str.contains(';'))]
-	with pd.option_context('display.max_rows',None):
-		display(mcSEED_single_entries)
-		pass
-	
-	pathways_with_multiple_phenotypes = []
-	single_entry_pathway_phenotype_map = {}
-	for pathway in mcSEED_single_entries['Functional pathway'].unique():
-		pathway_single_entries = mcSEED_single_entries[mcSEED_single_entries['Functional pathway']==pathway]
-		#Functional pathways with one or more associated phenotypes - leave intact (ignore for processing)
-		if(len(pathway_single_entries['Phenotype'].unique())) > 1: 
-			pathways_with_multiple_phenotypes.append(pathway)
-		#Single entry -> single entry - save and use for mapping ambiguous/incorrect pathway/phenotype pairs later 
-		else: 
-			single_entry_pathway_phenotype_map[pathway] = pathway_single_entries['Phenotype'].iloc[0]
-	#Add unambiguous (one to one) semicolon list pathway / phenotype pairs to single_entry_pathway_phenotype_map
-	for pht in mcSEED['Phenotype'].unique():
-		if pht not in mcSEED_single_entries['Phenotype'].unique() and ';' in pht:
-			pht_mcSEED_entries = mcSEED[mcSEED['Phenotype']==pht]
-			if len(pht_mcSEED_entries['Functional pathway'].unique())==1:
-				pathway = pht_mcSEED_entries['Functional pathway'].iloc[0]
-				single_entry_pathway_phenotype_map[pathway] = pht
-	# print(pathways_with_multiple_phenotypes)
-	# print(single_entry_pathway_phenotype_map)
-	#Iterate over pathways in mcSEED 
-	# print(len(mcSEED['Functional pathway'].unique()))
-	for pathway in mcSEED['Functional pathway'].unique():
-		pathway_mcSEED_loci = mcSEED[mcSEED['Functional pathway']==pathway]
-		if len(pathway_mcSEED_loci['Phenotype'].unique())>1 and pathway not in pathways_with_multiple_phenotypes:
-			if pathway in single_entry_pathway_phenotype_map:
-				# print('Single entry phenotype value: {0}'.format(single_entry_pathway_phenotype_map[pathway]))
-				# display(pathway_mcSEED_loci)
-				pass
-	return mcSEED
+	#D E B U G M O D E 
 
-def load_mcSEED(mcSEED_fpath,index_label='Locus tag',fix_phenotypes=False,deduplicate_locus_tags=False,
-				return_pathway_df=False):
-	mcSEED = pd.read_csv(mcSEED_fpath)
-	if 'Module1' in mcSEED.columns:
+	#1. Entries with semicolon lists in Phenotype and only one annotation per locus tag: OK
+	multiple_phenotypes = mcSEED.loc[(mcSEED_locus_vc[mcSEED.index]==1) &
+									(mcSEED['Phenotype'].str.contains(';'))
+										,:]
+	for lt in multiple_phenotypes.index: 
+		original_pathway_entry = multiple_phenotypes.loc[lt,'Functional pathway']
+		#Generate list of phts which are represented in mcSEED_phenotype_df
+		phts = [pht for pht in multiple_phenotypes.loc[lt,'Phenotype'].split('; ') if pht in mcSEED_phenotype_df.index]
+		if len(phts) == 0:
+			#If none of Phenotype values are in mcSEED_phenotype_df, use original pathway entry 
+			new_pathway_entry = original_pathway_entry
+		else: 
+			new_pathway_entry = '; '.join([mcSEED_phenotype_df.loc[pht,'Functional pathway'] for pht in phts])
+		multiple_phenotypes.loc[lt,'Functional pathway'] = new_pathway_entry
+	
+	#2. Entries with semicolon lists in Functional pathway and only one annotation per locus tag: OK
+	
+	#Select entries with only one annotation and semicolon-separated pathway entry; also mutually exclusive 
+	#with multiple_phenotypes (i.e. prioritize modified annotations from multiple_phenotypes in case where
+	#both columns have a semicolon-list)
+	multiple_pathways = mcSEED.loc[(mcSEED_locus_vc[mcSEED.index]==1) &
+									~(mcSEED.index.isin(multiple_phenotypes.index)) &
+									(mcSEED['Functional pathway'].str.contains(';'))]
+	#Similar to processing of multiple phenotypes above, except for entries with semicolon-separated lists of 
+	#'Functional pathway' entries 
+	for lt in multiple_pathways.index:
+		original_phenotypes = multiple_pathways.loc[lt,'Phenotype']
+		pathways = [pw for pw in multiple_pathways.loc[lt,'Functional pathway'].split('; ') \
+					if pw in mcSEED_phenotype_df['Functional pathway'].unique()]
+		#If cannot find any of pathways in mcSEED_phenotype_df, use original phenotypes for this record
+		if len(pathways) == 0:
+			new_phenotypes = original_phenotypes
+		#Else, get corresponding phenotype abbreviations for each pathway which is in mcSEED_phenotype_df 
+		else:
+			new_phenotypes = '; '.join([mcSEED_phenotype_df.index[mcSEED_phenotype_df['Functional pathway']==pw][0] \
+								for pw in pathways])
+		multiple_pathways.loc[lt,'Phenotype'] = new_phenotypes
+	
+	#3. Those with multiple annotations (i.e. duplicate locus tag entries with possible differences in phenotype 
+	#annotations per entry): OK
+	#Collect phenotypes across rows and use to generate corresponding list of Functional pathway entries
+	#Set values for Phenotype and Functional pathway for all rows with this locus tag 
+	multiple_lts = mcSEED.loc[(mcSEED_locus_vc[mcSEED.index]>1)]
+	for lt in multiple_lts.index:
+		lt_entries = multiple_lts.loc[lt,:]
+		#Nested list of split out Phenotype entries associated with this locus tag (i.e. turn list of unique 
+		#semicolon-sep strs into list of unique lists)
+		lt_phts = [pht_str.split('; ') for pht_str in lt_entries['Phenotype'].unique()]
+		#Flatten - https://stackoverflow.com/questions/952914/how-do-i-make-a-flat-list-out-of-a-list-of-lists
+		#I'm dumb and can never remember lol
+		lt_phts = [pht for phts in lt_phts for pht in phts]
+		#Get corresponding pathway entries
+		lt_pathways_str = '; '.join([mcSEED_phenotype_df.loc[pht,'Functional pathway'] for pht in lt_phts])
+		lt_phts_str = '; '.join(lt_phts)
+		multiple_lts.loc[lt,'Phenotype'] = lt_phts_str
+		multiple_lts.loc[lt,'Functional pathway'] = lt_pathways_str
+	#Get rest of mcSEED annotations (those not covered in three cases above)
+	everything_else = mcSEED.loc[~(mcSEED.index.isin(multiple_phenotypes.index)) &\
+								~(mcSEED.index.isin(multiple_pathways.index)) &\
+								~(mcSEED.index.isin(multiple_lts.index))]
+	#Combine all three records tables and sort_index. 
+	#Note cannot sort by original mcSEED index order because of duplicate locus tags 
+	all_with_modified_annotations = pd.concat((multiple_phenotypes,multiple_pathways,
+												multiple_lts,everything_else)).sort_index()
+	#Note original order for entries with multiple annotations per locus tag is NOT maintained 
+	# display(all_with_modified_annotations.loc[all_with_modified_annotations.index.value_counts()>1,:]) 
+	return all_with_modified_annotations
+
+def load_mcSEED(mcSEED_fpath,mcSEED_phenotype_df=pd.DataFrame(),index_label='Locus tag',
+				fix_phenotypes_and_pathways=False,deduplicate_locus_tags=False,
+				retain_module_format=False):
+	"""Load mcSEED annotations into a standardized format from either functional category/pathway or module
+	formatted mcSEED annotation tables.
+
+	@param mcSEED_fpath: str, required. File path to load mcSEED annotations from. Supports .csv or .tsv files.  
+	@param mcSEED_phenotype_df: pd.DataFrame, default empty DataFrame. Indexed on phenotype abbreviations and contains columns
+	Functional pathway and Functional category. This is used when fix_phenotypes_and_pathways=True to 
+	add in missing phenotypes/pathways from locus tags with multiple annotations. 
+	@param index_label: label, default 'Locus tag'. If provided, sets this column as the index of returned mcSEED DataFrame. 
+	@param fix_phenotypes_and_pathways: bool, default False. Use mcSEED_phenotype_df to fill in missing values
+	for locus tags with mulitple annotations
+	@param deduplicate_locus_tags: bool, default False. Combine multiple annotations for a given locus tag into 
+	one row with semicolon-separated entries for Functional category/Functional pathway/Phenotype
+	@param retain_module_format: bool, default False. If True, will not reformat Module1/2/3 version of annotations. If True,
+	deduplication of locus tags is not supported and annotations will be returned as is.
+
+	"""
+	
+	#Handle .csv or .tsv formatted annotation paths
+	if re.search(r'\.csv',mcSEED_fpath):
+		mcSEED = pd.read_csv(mcSEED_fpath)
+	elif re.search(r'\.tsv',mcSEED_fpath):
+		mcSEED = pd.read_csv(mcSEED_fpath,sep='\t')
+	#Automatically convert module format mcSEED tables - see above convert_mcSEED_from_module_format.
+	#Can be overriden with retain_module_format=True
+	if 'Module1' in mcSEED.columns and not retain_module_format:
 		mcSEED = convert_mcSEED_from_module_format(mcSEED,standardize_categories=True,retain_max_phenotype=True)
+	elif retain_module_format: 
+		#Deduplication of locus tags and other functions not supported for Module format 
+		#annotations - return mcSEED as is.
+		#Raise warnings for unsupported handling of phenotypes/duplicate locus tags.
+		if fix_phenotypes_and_pathways or deduplicate_locus_tags:
+			warnings.warn("fix_phenotypes_and_pathways or deduplicate_locus_tags was set to True but these are not supported with retain_module_format.")
+		return mcSEED 
+	#Column to use as locus tag index 
 	if index_label != '':
 		mcSEED = mcSEED.set_index(index_label)
-	if fix_phenotypes:
-		mcSEED = _fix_phenotypes_from_pathways(mcSEED)
-		return mcSEED #TODO remove me too enable deduplicated locus tags 
+	#TODO: decide when to invoke this 
+	if fix_phenotypes_and_pathways:
+		if len(mcSEED_phenotype_df) == 0:
+			raise ValueError("If using fix_phenotypes_and_pathways, mcSEED_phenotype_df must be provided.")
+		mcSEED = _fix_phenotypes_and_pathways(mcSEED, mcSEED_phenotype_df)
 
 	#deduplicate_locus_tags: gives a version of mcSEED annotations with only one entry per locus tag
 	#multiple functional category/functional pathway/phenotype annotations are combined in this single entry 
@@ -128,22 +225,8 @@ def load_mcSEED(mcSEED_fpath,index_label='Locus tag',fix_phenotypes=False,dedupl
 			else: 
 				mcSEED_unique.loc[mcSEED_locus,:] = mcSEED.loc[mcSEED_locus,:]
 		mcSEED = mcSEED_unique.loc[mcSEED.index.unique()]
-	if return_pathway_df:
-		pht_pathway_df = pd.DataFrame(columns=["Functional pathway","Functional category"])
-		for pht_str in mcSEED["Phenotype"].unique():
-			pht_str_matches = mcSEED.loc[mcSEED["Phenotype"]==pht_str]
-			assert(len(pht_str_matches["Functional pathway"].unique())==1)
-			functional_pathway = pht_str_matches.iloc[0]["Functional pathway"]
-			functional_category = pht_str_matches.iloc[0]["Functional category"]
-			split_phts = [pht.strip() for pht in pht_str.split(";")]
-			split_paths = [cat.strip().title() for cat in functional_pathway.split(";")]
-			for pht, cat in zip(split_phts,split_paths):
-				pht_pathway_df.loc[pht,"Functional pathway"] = cat
-			if len(functional_category.split(";")) == 1:
-				pht_pathway_df.loc[split_phts,"Functional category"] = functional_category
-		return mcSEED, pht_pathway_df
-	else:
-		return mcSEED
+
+	return mcSEED
 
 def _get_unique_mcSEED_info_from_locus_annotations(locus_annotations): 
 	#Helper function; extracts unique entries from semicolon-separated lists of Functional 
@@ -263,6 +346,62 @@ def filter_rRNA_loci_all_genomes(counts_df,genomes_dir='',rRNA_description_re_pa
 	all_rRNA_loci_in_counts_df = all_rRNA_loci[all_rRNA_loci.isin(counts_df.index)]
 	filtered_counts_df = counts_df.drop(index=all_rRNA_loci_in_counts_df)
 	return filtered_counts_df
+
+
+###====================================================================================###
+### Data Visualization functions for bacterial annotations 
+###====================================================================================###
+
+def mcSEED_GSEA_heatmap(mcSEED_GSEA_df,pathway_col='pathway',organism_col='organism',NES_col='NES',
+	pval_col='padj',subset_pathways=[],subset_organisms=[],alpha=0.05,cmap_str='RdBu_r',vmin=-2,vmax=2):
+	"""Generate a heatmap encoding GSEA Normalized Enrichment Score (NES) and P-value information for 
+	mcSEED GSEA results with individual organisms as columns and pathways as rows. 
+
+	@param mcSEED_GSEA_df: pd.DataFrame, required. Must contain labels specified by pathway_col and 
+	organism_col which will be used to organize pathway results by organism in the heatmap. 
+	@param pathway_col: label in mcSEED_GSEA_df, default 'pathway'. Column for which organism 
+	GSEA pathway results are from. 
+	@param oragnism_col: label in mcSEED_GSEA_df, default 'organism'. Column for which organism 
+	GSEA pathway results are from. 
+	@param NES_col: label in mcSEED_GSEA_df for Normalized enrichment scores. Default 'NES'.
+	@param pval_col: label in mcSEED_GSEA_df for P-values to use for significance cutoff. Default 'padj'.
+	If '' is provided, will ignore significance thresholding and visualize all NES provided regardless of significance.  
+	@param subset_pathways, subset_organisms: list or array-like, optional. If provided, heatmap will only contain a subset of 
+	tested mcSEED pathways or organisms. 
+	@param alpha: float, default 0.05. Significance threshold to be applied to pval_col. Any pathway 
+	GSEA results with a p-value > alpha will be converted to np.nan and not colored in heatmap. 
+	@param cmap_str: str, default 'RdBu_r'. Must specify a valid seaborn color palette which will be converted 
+	into a color map. See: https://seaborn.pydata.org/tutorial/color_palettes
+	@param vmin, vmax: float, optional. Passed to sns.heatmap. 
+	"""
+	#Generate copy to modify 
+	heatmap_GSEA_data = mcSEED_GSEA_df.copy().reset_index()
+	cmap = sns.color_palette(cmap_str,as_cmap=True)
+	if len(subset_pathways) > 0:
+		#Drop entries in subset pathways which are not represented in heatmap_GSEA_data 
+		subset_pathways = [pathway for pathway in subset_pathways if pathway in heatmap_GSEA_data['pathway'].unique()]
+		heatmap_GSEA_data = heatmap_GSEA_data.loc[heatmap_GSEA_data['pathway'].isin(subset_pathways)]
+	if len(subset_organisms) > 0:
+		heatmap_GSEA_data = heatmap_GSEA_data.loc[heatmap_GSEA_data[organism_col].isin(subset_organisms)]
+	if pval_col:
+		#Default behavior: use pval_col to threshold NES scores. Anything with a P-value > alpha will be 
+		#converted to np.nan and not be visualized 
+		heatmap_GSEA_data['NES_sig'] = heatmap_GSEA_data.loc[heatmap_GSEA_data[pval_col]<=alpha,NES_col]
+	else:
+		#If empty str provided for pval_col, then use unthresholded NES for visualization
+		heatmap_GSEA_data['NES_sig'] = heatmap_GSEA_data['NES_sig']
+	heatmap_GSEA_data_2D = heatmap_GSEA_data.pivot(index=pathway_col,columns=organism_col,values='NES_sig') #TODO finalize 
+	if len(subset_pathways) > 0:
+		heatmap_GSEA_data_2D = heatmap_GSEA_data_2D.loc[subset_pathways,:]
+	if len(subset_organisms) > 0:
+		heatmap_GSEA_data_2D = heatmap_GSEA_data_2D.loc[:,subset_organisms]
+	fig,ax = plt.subplots(1,1,figsize=(6,6))
+	ax = sns.heatmap(heatmap_GSEA_data_2D,cmap=cmap,cbar=True,
+		vmin=vmin,vmax=vmax,xticklabels=True,yticklabels=True,linecolor='#000000',linewidths=0.5)
+	ax.set_facecolor(MTX_colors.NS_gray)
+	return ax 
+
+
 
 
 

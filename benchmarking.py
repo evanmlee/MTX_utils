@@ -32,7 +32,7 @@ default_MTX_FPR_cmap = MTX_colors.MTX_FPR_cmap
 ###====================================================================================###
 # Standardized functions for loading and manipulating statistical test results from various methods.  
 #Standard synth output directory structure is assumed to be:  
-#/synth_DE_output
+#/synth_DE_output (or base_output_dir)
 #   /Zhang_M1
 #       /strict
 #           /null-bug #datasets 
@@ -86,7 +86,8 @@ def load_zhang_results(model,dataset,
                         rna_dna_filt='strict',
                         base_output_dir="synth_DE_output",
                         results_fname="all_results.tsv",
-                        rename_cols={},dropna_policy='retain'):
+                        rename_cols={},dropna_policy='retain',
+                        invert_reference_direction=False,reference_replacement_dict={}):
     """Load Zhang model DE test results from model and dataset name using standardized directory structure.
 
     Parameters: 
@@ -106,11 +107,29 @@ def load_zhang_results(model,dataset,
     in the returned DataFrame. 
     @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
     will respectively filter out rows from test results using pandas dropna. 
+    @param invert_reference_direction: bool, default False. Invert reported log fold changes ('coef'). This 
+    is desirable if reference groups were not properly configured during MTXmodel run. In this case, it 
+    is recommended to also provide reference_replacement_dict, which will replace values in the 'value' column 
+    of the result table to reflect the inverted directionality.
+    @param reference_replacement_dict: dict, default {}. If invert_reference_direction=True, entries in the
+    'value' column of results_df will be replaced. This is purely for keeping track of the direction of 
+    comparisons for downstream interpretation. Example usage: reference_replacement_dict={'[Control]':'[Treatment]'}
     """
     zhang_results_dir = get_zhang_results_dir(model,dataset,
                                             rna_dna_filt=rna_dna_filt,base_output_dir=base_output_dir)
     zhang_results_fpath = os.path.join(zhang_results_dir,results_fname)
     results_df = load_zhang_results_from_fpath(zhang_results_fpath,rename_cols=rename_cols,dropna_policy=dropna_policy)
+    #Use options for loading inverted logFC direction and replacing metadata values. 
+    if invert_reference_direction:
+        results_df['coef'] = -1*results_df['coef']
+        for metadata_value in results_df['value'].unique():
+            if metadata_value not in reference_replacement_dict:
+                warnings.warn("Metadata value {0} is not in provided reference_replacement_dict.".format(metadata_value)+
+                    " Note that directionality of coefficients have been inverted but metadata"+
+                    " has not been overwritten.")
+            else: 
+                results_df['value'] = results_df['value'].replace(reference_replacement_dict)
+    results_df = results_df.sort_values('qval')
     return results_df
 
 def load_zhang_taxon_results(model,dataset,
@@ -118,7 +137,8 @@ def load_zhang_taxon_results(model,dataset,
                         base_output_dir="synth_DE_output",
                         results_fname="all_results.tsv",
                         rename_cols={},dropna_policy='retain',
-                        padj_all=False,padj_all_method='fdr_bh'):
+                        padj_all=False,padj_all_method='fdr_bh',
+                        invert_reference_direction=False,reference_replacement_dict={}):
     """Load Zhang model DE test results from model and dataset name using standardized directory structure
     for by-taxon MTXmodel runs. 
 
@@ -140,6 +160,17 @@ def load_zhang_taxon_results(model,dataset,
     in the returned DataFrame. 
     @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
     will respectively filter out rows from test results using pandas dropna. 
+    @param padj_all: bool, default False. Whether or not to apply multiple test correction across all results
+    since taxon Zhang results are tested one genome at a time. Generates column 'padj_all' with these adjusted P-values. 
+    @param padj_all_method: str, default 'fdr_bh'. Method handle passed to statsmodels multipletests function
+    for P-value correction. 
+    @param invert_reference_direction: bool, default False. Invert reported log fold changes ('coef'). This 
+    is desirable if reference groups were not properly configured during MTXmodel run. In this case, it 
+    is recommended to also provide reference_replacement_dict, which will replace values in the 'value' column 
+    of the result table to reflect the inverted directionality.
+    @param reference_replacement_dict: dict, default {}. If invert_reference_direction=True, entries in the
+    'value' column of results_df will be replaced. This is purely for keeping track of the direction of 
+    comparisons for downstream interpretation. Example usage: reference_replacement_dict={'[Control]':'[Treatment]'}
     """
     zhang_results_dir = get_zhang_results_dir(model,dataset,
                                             rna_dna_filt=rna_dna_filt,base_output_dir=base_output_dir)
@@ -152,6 +183,17 @@ def load_zhang_taxon_results(model,dataset,
         taxon_results_fpath = os.path.join(zhang_results_dir,taxon,results_fname)
         taxon_results = load_zhang_results_from_fpath(taxon_results_fpath,rename_cols=rename_cols,dropna_policy=dropna_policy)
         all_taxon_results = pd.concat((all_taxon_results,taxon_results))
+    #Use options for loading inverted logFC direction and replacing metadata values. 
+    if invert_reference_direction:
+        all_taxon_results['coef'] = -1*all_taxon_results['coef']
+        for metadata_value in all_taxon_results['value'].unique():
+            if metadata_value not in reference_replacement_dict:
+                warnings.warn("Metadata value {0} is not in provided reference_replacement_dict.".format(metadata_value)+
+                    " Note that directionality of coefficients have been inverted but metadata"+
+                    " has not been overwritten.")
+            else: 
+                all_taxon_results['value'] = all_taxon_results['value'].replace(reference_replacement_dict)
+    #Sort by ascending qval (most to least significant)
     all_taxon_results = all_taxon_results.sort_values('qval')
     if padj_all:
         #multipletests output [1]: pvals_corrected

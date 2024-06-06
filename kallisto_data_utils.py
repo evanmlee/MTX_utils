@@ -328,7 +328,7 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
         #x positions for each hue label) but applies the same NS_gray hue value for each label
         ns_palette = dict(zip(hue_levels,[MTX_colors.NS_gray]*len(hue_levels)))
         ax = sns.stripplot(swarm_results_ns,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
-                        palette=ns_palette,dodge=True,zorder=2)
+                        palette=ns_palette,dodge=True,size=markersize,zorder=2)
         ax = sns.stripplot(swarm_results_sig,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
                         palette=palette,dodge=True,size=markersize,zorder=3)
     #Standardize axes and title
