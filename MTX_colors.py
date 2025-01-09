@@ -36,7 +36,11 @@ MTX_bar_palette = {0:"#FEACA7",1:"#9FC9EB"}
 MTX_point_palette = {0:"#FF2804",1:"#3E58A8"}
 
 #Glycan-up-down-palette
-glycan_updown_palette = {-1:'#E2C56E',0:'#BBBBBB',1:'#F7941D'}
+glycan_updown_palette = {-1:'#E2C56E',0:'#BBBBBB',1:'#DA4922'}
+#Arabinan-alt
+new_arabinan = '#DA4922'
+old_arabinan_alt = '#F7941D'
+glucose = '#E2C56E'
 
 MTX_cubehelix_cmap1 = sns.cubehelix_palette(start=.5, rot=-.5, as_cmap=True)
 MTX_cubehelix_cmap2 = sns.cubehelix_palette(start=1.5, rot=-.5, as_cmap=True)

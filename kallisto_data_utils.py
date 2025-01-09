@@ -19,7 +19,8 @@ from MTX_utils import bacteria_info, MTX_colors
 ###====================================================================================###
 ### Prepare kallisto counts x samples table:
 def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
-        kallisto_merged_table_fpath='',counts_type='est_counts',force_int=False):
+        kallisto_merged_table_fpath='',counts_type='est_counts',force_int=False,
+        barcode_label='Barcode',samplename_label='SampleName'):
     '''Parse expected directory structure in kallisto_output_dir and generate a DataFrame mapping samples to kallisto counts. 
 
     @param barcode_sample_df: pd.DataFrame, required. Must have columns Barcode and SampleName. The entries in Barcode will be 
@@ -33,10 +34,13 @@ def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
     @return kallisto_merged_counts_df: pd.DataFrame, locus tags x samples 
     '''
     #Check barcode_sample_df
-    if barcode_sample_df.index.name != 'Barcode' and 'Barcode' not in barcode_sample_df.columns:
-        raise ValueError('Provided barcode_sample_df missing column Barcode.')
-    if 'SampleName' not in barcode_sample_df.columns:
-        raise ValueError('Provided barcode_sample_df missing column SampleName.')
+    if barcode_sample_df.index.name != barcode_label and barcode_label not in barcode_sample_df.columns:
+        raise ValueError('Provided barcode_sample_df missing column {0} specified by barcode_col.'.format(barcode_label))
+    if barcode_sample_df.index.name != samplename_label and samplename_label not in barcode_sample_df.columns:
+        raise ValueError('Provided barcode_sample_df missing column {0} specified by samplename_col.'.format(samplename_label))
+    #Format handling of barcode_sample_df: reset index so barcode_label and samplename_label are columns, not index 
+    if barcode_sample_df.index.name == barcode_label or barcode_sample_df.index.name == samplename_label:
+        barcode_sample_df = barcode_sample_df.reset_index()
     #Find all barcode directories (each for one sample) in kallisto_output_dir
     barcode_subdirs = os.listdir(kallisto_output_dir)
     #Ignore hidden directories for list of sample directories
@@ -62,13 +66,13 @@ def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
     #Row names -> feature names from 'target_id' column 
     kallisto_merged_counts_df.index = kallisto_feature_names
     #Substitute barcode column names with Sample Names from barcode_sample_df 
-    if barcode_sample_df.index.name != 'Barcode':
-        barcode_sample_df = barcode_sample_df.set_index('Barcode')
+    if barcode_sample_df.index.name != barcode_label:
+        barcode_sample_df = barcode_sample_df.set_index(barcode_label)
     #Map barcodes to sample names and rename columns in kallisto_merged_counts_df
-    kallisto_sample_names = barcode_sample_df.loc[kallisto_merged_counts_df.columns,'SampleName']
+    kallisto_sample_names = barcode_sample_df.loc[kallisto_merged_counts_df.columns,samplename_label]
     kallisto_merged_counts_df.rename(columns=dict(zip(kallisto_merged_counts_df.columns,kallisto_sample_names)),inplace=True)
     #Sort sample names by their appearance in barcode_sample_df 
-    sorted_sample_names = barcode_sample_df['SampleName'][barcode_sample_df['SampleName'].isin(kallisto_merged_counts_df.columns)]
+    sorted_sample_names = barcode_sample_df[samplename_label][barcode_sample_df[samplename_label].isin(kallisto_merged_counts_df.columns)]
     kallisto_merged_counts_df = kallisto_merged_counts_df[sorted_sample_names]
     #Optional handling of float data from kallisto with force_int; np.ceil used to differentiate low confidence prob estimates (or low tpm)
     #from 0s. 
@@ -89,6 +93,73 @@ def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
         else: 
             raise ValueError('kallisto_merged_table_fpath should be a .csv, .tsv, or .txt file path.')
     return kallisto_merged_counts_df
+
+###====================================================================================###
+### Bowtie2/Samtools Counts Processing 
+###====================================================================================###
+def process_bowtie2_output(barcode_sample_df,bowtie2_output_dir,
+        counts_file_name_suffix='_microbial.txt',
+        bowtie2_merged_table_fpath='',counts_type='est_counts',
+        barcode_label='Barcode',samplename_label='SampleName'):
+    '''Process bowtie2 and samtools idxcounts output into a counts DataFrame indexed on locus tags and with samples 
+    as columns. 
+
+    @param barcode_sample_df: pd.DataFrame, required. Must have columns Barcode and SampleName. The entries in Barcode will be 
+    used to map subdirectories of kallisto_output_dir containing individual sample abundance estimates to sample names in the 
+    returned DataFrame. 
+    @param bowtie2_output_dir: path to directory containing kallisto outputs, required. Must contain individual sample 
+    index counts outputs of the format {bowtie2_output_dir}/{barcode}{counts_file_name_suffix}
+    '''
+    #Check barcode_sample_df for corresponding columns 
+    if barcode_sample_df.index.name != barcode_label and barcode_label not in barcode_sample_df.columns:
+        raise ValueError('Provided barcode_sample_df missing column {0} specified by barcode_col.'.format(barcode_label))
+    if barcode_sample_df.index.name != samplename_label and samplename_label not in barcode_sample_df.columns:
+        raise ValueError('Provided barcode_sample_df missing column {0} specified by samplename_col.'.format(samplename_label))
+    #Format handling of barcode_sample_df: reset index and set index to barcode_label
+    if barcode_sample_df.index.name == samplename_label:
+        barcode_sample_df = barcode_sample_df.reset_index()
+    if barcode_sample_df.index.name != barcode_label:
+        barcode_sample_df = barcode_sample_df.set_index(barcode_label)
+
+    #Find all barcode directories (each for one sample) in kallisto_output_dir
+    all_barcode_files = [fname for fname in os.listdir(bowtie2_output_dir) \
+                        if re.search(counts_file_name_suffix,fname)]
+    #Determine delimiter to use for counts file reading 
+    if re.search(r'\.csv',counts_file_name_suffix):
+        delim = ','
+    elif re.search(r'\.txt|\.tsv',counts_file_name_suffix):
+        delim = '\t'
+    else:
+        raise ValueError('unknown file suffix specified by counts_file_name_suffix. Must contain .csv, .tsv, or .txt.')
+    bowtie2_merged_counts_df = pd.DataFrame()
+    for i,barcode_fname in enumerate(all_barcode_files):
+        barcode = re.match('([ACGT]+[-_][ACGT]+){0}'.format(counts_file_name_suffix),barcode_fname).group(1)
+        bowtie2_sample_counts = pd.read_csv(os.path.join(bowtie2_output_dir,barcode_fname),
+                sep=delim,names=['target_id','length','counts','unmapped_counts'])
+        #Convert to format compatible with pd.concat across all samples: indexed on target_id and 
+        #columns named by barcode
+        bowtie2_sample_counts = bowtie2_sample_counts.set_index('target_id')\
+                                    .loc[:,['counts']].rename(columns={'counts':barcode})
+        bowtie2_merged_counts_df = pd.concat((bowtie2_merged_counts_df,bowtie2_sample_counts),axis=1)
+    #Rename columns from barcodes to sample identifiers
+    bowtie2_sample_names = barcode_sample_df.loc[bowtie2_merged_counts_df.columns,samplename_label]
+    bowtie2_merged_counts_df.rename(columns=dict(zip(bowtie2_merged_counts_df.columns,bowtie2_sample_names)),inplace=True)
+    #Sort sample names by their appearance in barcode_sample_df 
+    sorted_sample_names = barcode_sample_df[samplename_label][barcode_sample_df[samplename_label].isin(bowtie2_merged_counts_df.columns)]
+    bowtie2_merged_counts_df = bowtie2_merged_counts_df[sorted_sample_names]
+    
+    #Write results if bowtie2_merged_table_fpath is provided
+    if bowtie2_merged_table_fpath:
+        if re.search(r'\.csv',bowtie2_merged_table_fpath):
+            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath)
+        elif re.search(r'\.tsv',bowtie2_merged_table_fpath):
+            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep='\t')
+        elif re.search(r'\.txt',bowtie2_merged_table_fpath):
+            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep=' ')
+        else: 
+            raise ValueError('kallisto_merged_table_fpath should be a .csv, .tsv, or .txt file path.')
+    return bowtie2_merged_counts_df
+
 
 ###====================================================================================###
 # Processed Output Loading 
@@ -205,6 +276,41 @@ def load_coproseq_results(coproseq_fpath='norm_percent.profile',bacteria_aliases
 ###====================================================================================###
 ### Data Summarization  
 ###====================================================================================###
+def mgx_to_relative_abundance(mgx_df,bacteria_info,spike_ins=[],
+                                locus_tag_prefix_re_pat=r'([\w]+)_\d+',
+                                index_on_organism=False):
+    '''Convert a table of metagenomic counts (by gene) into relative abundances by organism for each sample. 
+
+    @param mgx_df: DataFrame, reqruied. Indexed on locus tags and samples as columns. 
+    @param bacteria_info: DataFrame, required. Must be indexed on locus tag prefixes for genes in 
+    mgx_df. Must contain column organism if spike_ins is provided. See bacteria_info.py.
+    @param spike-in: array-like, optional. Locus tag prefixes corresponding to spike-in strains which
+    should not be included in relative abundance calculation/ normalization. 
+    @param locus_tag_prefix_re_pat: str, optional. Regular expression pattern to extract locus tag prefixes from 
+    gene identifiers. Default assumes form of {locus tag prefix}_{integer gene index}. 
+    @param index_on_organism: bool, default False. Index returned relative abundance DataFrame on 
+    organism identifiers instead of locus tag prefixes 
+    '''
+    #Add temporary strain column 
+    mgx_df['locus_tag_prefix'] = mgx_df.index.str.extract(locus_tag_prefix_re_pat,expand=False)
+    if len(spike_ins) > 0:
+        #Check format of spike_ins by checking if they match entries in locus_tag_prefix or bacteria_info['organism']
+        lt_spike_ins = [lt for lt in spike_ins if lt in mgx_df['locus_tag_prefix'].unique()]
+        organism_spike_ins = [lt for lt in spike_ins if lt in bacteria_info['organism'].unique()]    
+        #Filter out lt_spike_ins
+        mgx_df = mgx_df.loc[~(mgx_df['locus_tag_prefix'].isin(lt_spike_ins))]
+        #Filter out organism_spike_ins - map locus_tag_prefixes using bacteria_info, filter out if in organism_spike_ins
+        mgx_df = mgx_df.loc[~(mgx_df['locus_tag_prefix'].map(bacteria_info['organism']).isin(organism_spike_ins))]
+    mgx_sample_cols = mgx_df.columns[~(mgx_df.columns.isin(['locus_tag_prefix']))]
+    mgx_depths_per_sample = mgx_df[mgx_sample_cols].sum(axis=0)
+    norm_mgx = mgx_df.loc[:,mgx_sample_cols]/mgx_depths_per_sample
+    norm_mgx['locus_tag_prefix'] = norm_mgx.index.str.extract(locus_tag_prefix_re_pat,expand=False)
+    organism_ra_df = norm_mgx.groupby('locus_tag_prefix').agg(sum)
+    if index_on_organism:
+        organism_ra_df.index = bacteria_info.loc[organism_ra_df.index,'organism']
+    return organism_ra_df
+    
+
 def taxon_DE_fractions(results_df,bug_df,alpha=0.05,sig_label='qval',subset_to_tested=True,
                         all_features_df=[],logFC_label='coef'):
     '''Return basic statistics about the fraction of differentially expressed genes ('DE_Fraction')
@@ -251,7 +357,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
                 hue_label='significant',
                 alpha=0.05,
                 ax=None,figsize=(4,4),title='',
-                xlim=(-10,10),ylim=(-0.5,7),
+                xlim=(-10,10),ylim=(-0.5,7),markersize=5,linewidth=0,
                 palette={True:sns.color_palette('colorblind')[0],False:MTX_colors.NS_gray},
                 legend=True):
     '''Generate a volcano plot of differential testing results, plotting logFC vs -log(p_value) for
@@ -274,17 +380,12 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
         results_df['direction_significant'] = (results_df[pval_label] <=alpha).astype(int)
         down_results = results_df.loc[(results_df[logFC_label] < 0)].index
         results_df.loc[down_results,'direction_significant'] = results_df.loc[down_results,'direction_significant']*-1
-        display(results_df['direction_significant'].unique())
-        # significant_down_results = results_df.loc[(results_df['direction_significant'] == 1) & \
-                                                    # (results_df[logFC_label] < 0)].index
 
-
-    # display(results_df[hue_label])
     results_df['log_pval'] = -np.log10(results_df[pval_label])
     #Volcano plot scatter
     ax = sns.scatterplot(results_df.sort_values(hue_label),x=logFC_label,y='log_pval',hue=hue_label,
-        #hue_order=(results_df[hue_label].unique().sort()),
-        palette=palette,ax=ax)
+        palette=palette,ax=ax,s=markersize,linewidth=linewidth)
+
     ax.set_xlabel('logFC')
     ax.set_ylabel('-log10 p-value')
     ax.set_title(title)
@@ -295,6 +396,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
     else:
         ax.get_legend().remove()
+    return ax 
 
 def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='strain',
                         pval_label='qval',hue_label='significant',
@@ -431,22 +533,25 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
 
 def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=None,
                     bar_palette=MTX_colors.MG02_bar_palette.values(),
-                    swarm_palette=MTX_colors.MG02_point_palette.values(),ax=None,
+                    swarm_palette=MTX_colors.MG02_point_palette.values(),
+                    bar_alpha=1,ax=None,
                     show_legend=True):
     if not ax: 
         fig, ax = plt.subplots(figsize=figsize)
     #barplot
     ax = sns.barplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
                     palette=bar_palette,zorder=0,dodge=dodge,ax=ax,
-                    capsize=0.1,errorbar='sd',err_kws={'linewidth':1})
+                    capsize=0.1,errorbar='sd',err_kws={'linewidth':1},alpha=bar_alpha,
+                    legend=True)
     #overlaid swarmplot 
     ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
               palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=3.5)
+    # if ax.get_legend():
     if show_legend:
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
     else:
         ax.get_legend().remove()
-    #Set y minimum to 0 
-    ymin,ymax  = ax.get_ylim()
-    ax.set_ylim(0,ymax)
+    #Set y minimum to 0 - deprecated in case horizontal barplot
+    # ymin,ymax  = ax.get_ylim()
+    # ax.set_ylim(0,ymax)
     return ax

@@ -105,3 +105,8 @@ Pro_d,proline degradation,Other catabolic pathways
 Thr_d,threonine degradation,Other catabolic pathways
 Trp_d,tryptophan degradation,Other catabolic pathways
 Urea_d,urea degradation,Other catabolic pathways
+IMV,Melavonate biosynthesis,Vitamins/cofactors
+IDX,Isoprenoid biosynthesis,Vitamins/cofactors
+(Mal)n,Maltodextrin utilization,Carbohydrate utilization
+(GalA)n,Oligogalacturonate utilization,Carbohydrate utilization
+(GlcA)n,Glucuronides utilization,Carbohydrate utilization

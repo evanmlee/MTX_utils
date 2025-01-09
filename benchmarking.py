@@ -57,12 +57,12 @@ def get_zhang_results_dir(model,dataset,rna_dna_filt='strict',base_output_dir="s
 
 def get_DESeq_results_dir(model,dataset,base_output_dir="synth_DE_output"):
     #Standardized directory structure for DESeq2 results
-    DES_results_dir = os.path.join(base_output_dir,'DESeq2',model,dataset)
+    DES_results_dir = os.path.join(base_output_dir,model,dataset)
     return DES_results_dir
 
 def get_MPRAnalyze_results_dir(model,dataset,base_output_dir="synth_DE_output"):
     #Standardized directory structure for MPRAnalyze DE results 
-    MPRAnalyze_results_dir = os.path.join(base_output_dir,'MPRAnalyze',model,dataset)
+    MPRAnalyze_results_dir = os.path.join(base_output_dir,model,dataset)
     return MPRAnalyze_results_dir
 
 def load_zhang_results_from_fpath(results_fpath,rename_cols={},dropna_policy='retain'):
@@ -87,6 +87,7 @@ def load_zhang_results(model,dataset,
                         base_output_dir="synth_DE_output",
                         results_fname="all_results.tsv",
                         rename_cols={},dropna_policy='retain',
+                        filtered_metadata_list='all',
                         invert_reference_direction=False,reference_replacement_dict={}):
     """Load Zhang model DE test results from model and dataset name using standardized directory structure.
 
@@ -107,6 +108,9 @@ def load_zhang_results(model,dataset,
     in the returned DataFrame. 
     @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
     will respectively filter out rows from test results using pandas dropna. 
+    @param filtered_metadata_list: array-like, default 'all'. If provided, filter results to those corresponding to 
+    only metadata values in filtered_metadata_list. Useful if MTXmodel was given multiple fixed effects 
+    but only some are relevant comparisons. 
     @param invert_reference_direction: bool, default False. Invert reported log fold changes ('coef'). This 
     is desirable if reference groups were not properly configured during MTXmodel run. In this case, it 
     is recommended to also provide reference_replacement_dict, which will replace values in the 'value' column 
@@ -119,9 +123,21 @@ def load_zhang_results(model,dataset,
                                             rna_dna_filt=rna_dna_filt,base_output_dir=base_output_dir)
     zhang_results_fpath = os.path.join(zhang_results_dir,results_fname)
     results_df = load_zhang_results_from_fpath(zhang_results_fpath,rename_cols=rename_cols,dropna_policy=dropna_policy)
+    #Option for filtering metadata comparisons
+    if filtered_metadata_list != 'all':
+        if len(filtered_metadata_list) > 0:
+            results_df = results_df[results_df['metadata'].isin(filtered_metadata_list)]
     #Use options for loading inverted logFC direction and replacing metadata values. 
+    if 'coef' in rename_cols:
+        coef_label = rename_cols['coef']
+    else: 
+        coef_label = 'coef'
+    if 'qval' in rename_cols:
+        qval_label = rename_cols['qval']
+    else: 
+        qval_label = 'qval'
     if invert_reference_direction:
-        results_df['coef'] = -1*results_df['coef']
+        results_df[coef_label] = -1*results_df[coef_label]
         for metadata_value in results_df['value'].unique():
             if metadata_value not in reference_replacement_dict:
                 warnings.warn("Metadata value {0} is not in provided reference_replacement_dict.".format(metadata_value)+
@@ -129,7 +145,7 @@ def load_zhang_results(model,dataset,
                     " has not been overwritten.")
             else: 
                 results_df['value'] = results_df['value'].replace(reference_replacement_dict)
-    results_df = results_df.sort_values('qval')
+    results_df = results_df.sort_values(qval_label)
     return results_df
 
 def load_zhang_taxon_results(model,dataset,
@@ -284,7 +300,7 @@ def load_MPRAnalyze_results(model,dataset,
 
 
 ###====================================================================================###
-### Summary Statistics  
+### Summary Statistics - simulated data (Zhang)
 ###====================================================================================###
 
 def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.DataFrame(),dataset_name="",
@@ -301,7 +317,6 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     
     Optional parameters: 
     @param spiked_features: DataFrame, optional: must contain column 'direction' if check_direction=True.
-
     which correspond to MTX genes/features in all_results which have spiked-in/ground truth differential expression. 
     @param dataset_name: str, optional. If provided, will fill in appropriate columns in returned summary_df
     @param model: str, optional. If provided, will fill in appropriate columns in returned summary_df
@@ -478,6 +493,69 @@ def manual_ROC_AUC(ROC_df,steps_method='steps-post'):
     return auc 
 
 ###====================================================================================###
+### Summary Statistics - real in vitro datasets 
+###====================================================================================###
+
+def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features,
+                                            dataset_name="",model="",alpha=0.05,
+                                            sig_col="qval",fpr_sig_col="",skip_tpr=False,
+                                           check_direction=True,results_sign_col="coef"):
+    """Determine basic summary statistics about statistical test results contained in all_results. 
+    Requires pre-defined lists of true_sig_features and true_ns_features from which TPR and FPR will be calculated.
+    
+    Required parameters:
+    @param all_results: DataFrame, required: indexed on gene/feature identifiers. Must contain sig_col 
+    if significant_results is not provided and results_sign_col if check_direction is set to True (default). 
+    @param true_sig_features: indexed on gene/feature identifiers. Must contain column 'direction' if 
+    if check_direction is set to True (default). 
+    
+    Optional parameters: 
+    @param dataset_name: str, optional. If provided, will fill in appropriate columns in returned summary_df
+    @param model: str, optional. If provided, will fill in appropriate columns in returned summary_df
+    @param alpha: float, optional. The threshold cut-off for determining significance in all_results using sig_col 
+    and fpr_sig_col. Default 0.05. Must be in range (0,1]. 
+    @param sig_col: name of variable in all_results, optional. If using alpha to determine significant_results, 
+    this must be a column in all_results from which p/q-values <= alpha will be called as significant. 
+    @param fpr_sig_col: name of variable in all_results, optional. If provided, a separate column in all_results 
+    (e.g. uncorrected P-values) will be used to determine false positive calls for significance. 
+    Default empty string.
+    @param check_direction: boolean, optional. If provided, true positives must have positive/negative directionality
+    in the column specified by results_sign_col corresponding to 'direction' in the spiked_features DataFrame. 
+    @param results_sign_col: name of variable in all_results, optional. If check_direction is True, signs of values 
+    in this column must correspond with the direction in spiked_features in order for a significant result to be 
+    called a true positive. 
+    """
+    
+    #Summary DataFrame initialization
+    summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR']
+    summary_df = pd.DataFrame(columns=summary_df_columns)
+    #Number of tested and spiked features 
+    n_tested, n_true_sig,n_true_ns = len(all_results),len(true_sig_features),len(true_ns_features)
+    #Sensitivity calculation (TPR)
+    if not skip_tpr: #Use skip_tpr for 'null' datasets with no spiked features - assigns np.nan to tpr for clarity
+        #TPs: those with sig_col < alpha AND in true_sig_features
+        tp_df = all_results[(all_results[sig_col]<alpha) & \
+                            (all_results.index.isin(true_sig_features.index))] 
+        if check_direction:
+            if results_sign_col not in all_results or results_sign_col not in tp_df:
+                raise ValueError("Provided results_sign_col of {0} is not in all_results. Provide a valid column or set check_direction to False.".format(results_sign_col))
+            tp_df = tp_df[np.sign(tp_df[results_sign_col])==true_sig_features.loc[tp_df.index,'direction']] #filter based on sign of coefficient
+        tpr = len(tp_df)/n_true_sig
+    else:
+        tpr = np.nan
+    #Specificity and FPR calculation
+    #Optional: if fpr_sig_col is not provided, use sig_col for FP alpha thresholding 
+    if fpr_sig_col == '':
+        fpr_sig_col = sig_col
+    #FPs: those with sig_col < alpha AND in true_ns_features
+    fp_df = all_results[(all_results[fpr_sig_col]<alpha) & \
+                        (all_results.index.isin(true_ns_features.index))] 
+    fpr = len(fp_df)/n_true_ns
+    #Printed output
+    summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr]
+    return summary_df
+
+###====================================================================================###
 ### Data Visualization   
 ###====================================================================================###
 
@@ -512,7 +590,7 @@ def tpr_fpr_heatmaps(summary_df,x,y,
                     ordered_pivot_x=[],ordered_pivot_y=[],
                     figures_dir="figures_pdf",figure_fpath_basename="",
                     tpr_cmap=default_MTX_TPR_cmap,fpr_cmap=default_MTX_FPR_cmap,
-                    tpr_vmax=1,fpr_vmax=1,
+                    tpr_vmax=1,fpr_vmax=1,precision_decimals=None,
                     na_facecolor="#BBBBBB",annot=True,xlabel="",ylabel="",
                     subplot=False,figsize=(8,4)):
     """Generate basic heatmap visualization for true positive rate and false positive rates returned by zhang_significant_spiked_correspondence.
@@ -528,6 +606,7 @@ def tpr_fpr_heatmaps(summary_df,x,y,
     @param tpr_cmap, fpr_cmap: seaborn ColorMap objects, optional. color maps used for TPR and FPR heatmaps, 
         default to seaborn rocket and viridis
     @param tpr_vmax, fpr_vmax: float [0,1], optional. If provided, used as vmax argument in respective heatmaps for TPR and FPR
+    @param precision_decimals: None or int. If provided, will round to the provided number of decimals.  
     @param na_facecolor: str, color hexcode or pyplot color abbreviation. Default="#BBBBBB". Fill in color for na entries in 'TPR' or 'FPR'
         e.g. for TPR in 'null' datasets with no spiked features 
     @param annot: boolean, optional. Default=True. Passed to sns.heatmap, controls text annotation of TPR/FPR onto heatmap cells. 
@@ -535,8 +614,11 @@ def tpr_fpr_heatmaps(summary_df,x,y,
 
     """
     #Convert TPR and FPR to floats for data type compatibility with seaborn 
-    summary_df['TPR'] = summary_df['TPR'].astype('float')
-    summary_df['FPR'] = summary_df['FPR'].astype('float')
+    summary_df.loc[:,'TPR'] = summary_df.loc[:,'TPR'].astype('float')
+    summary_df.loc[:,'FPR'] = summary_df.loc[:,'FPR'].astype('float')
+    if precision_decimals:
+        summary_df.loc[:,'TPR'] = np.round(summary_df.loc[:,'TPR'].astype('float'),decimals=precision_decimals)
+        summary_df.loc[:,'FPR'] = np.round(summary_df.loc[:,'FPR'].astype('float'),decimals=precision_decimals)
     #Pivot summary_df
     summary_tpr_pivot = summary_df.pivot(index=y,columns=x,values="TPR")#.astype('float') #x and y-axes in heatmap correspond to columns and index in pivot oops :tweak face: 
     summary_fpr_pivot = summary_df.pivot(index=y,columns=x,values="FPR")#.astype('float')
@@ -555,8 +637,8 @@ def tpr_fpr_heatmaps(summary_df,x,y,
         fig1, ax1 = plt.subplots(1,1,figsize=figsize)
         fig2, ax2 = plt.subplots(1,1,figsize=figsize)
     #Heatmap calls for TPR and FPR pivots
-    sns.heatmap(summary_tpr_pivot,annot=True,vmin=0,vmax=tpr_vmax,cmap=tpr_cmap,ax=ax1)
-    sns.heatmap(summary_fpr_pivot,annot=True,vmin=0,vmax=fpr_vmax,cmap=fpr_cmap,ax=ax2)
+    sns.heatmap(summary_tpr_pivot,annot=annot,vmin=0,vmax=tpr_vmax,cmap=tpr_cmap,ax=ax1)
+    sns.heatmap(summary_fpr_pivot,annot=annot,vmin=0,vmax=fpr_vmax,cmap=fpr_cmap,ax=ax2)
     ax1.set_facecolor(na_facecolor) #Fill in na values in both heatmaps 
     ax2.set_facecolor(na_facecolor)
     ax1.set_title("True Positive Rate")

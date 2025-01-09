@@ -19,6 +19,27 @@ def load_bacteria_info(bacteria_fname="MG02_bacteria_info.csv",sep=','):
 		# bacteria_info[col] = bacteria_info[col].str.strip()
 	return bacteria_info
 
+def load_cazyme(cazyme_fpath):
+	#Handle .csv or .tsv formatted annotation paths
+	cazyme_header_cols = ['Strain','Locus tag','Family','Model','Description']
+	if re.search(r'\.csv',cazyme_fpath):
+		cazyme = pd.read_csv(cazyme_fpath,names=cazyme_header_cols).set_index('Locus tag')
+	elif re.search(r'\.tsv|\.txt',cazyme_fpath):
+		cazyme = pd.read_csv(cazyme_fpath,sep='\t',names=cazyme_header_cols).set_index('Locus tag')
+	return cazyme
+
+def load_single_organism_cazyme(cazyme_fpath,strain=''):
+	cazyme_header_cols = ['Locus tag','Family','Model','Description']
+	if re.search(r'\.csv',cazyme_fpath):
+		cazyme = pd.read_csv(cazyme_fpath,names=cazyme_header_cols).set_index('Locus tag')
+	elif re.search(r'\.tsv|\.txt',cazyme_fpath):
+		cazyme = pd.read_csv(cazyme_fpath,sep='\t',names=cazyme_header_cols).set_index('Locus tag')
+	cazyme.insert(0,'Strain',strain)
+	#Check for previous header labels and remove - search for locus tag patterns 
+	if not re.search(r'[A-Z0-9]+_\d+',cazyme.index[0]):
+		cazyme = cazyme.drop(index=cazyme.index[0])
+	return cazyme
+
 def load_mcSEED_phenotype_pathway_info(phenotypes_fpath='mcSEED_phenotype_pathway_codes.csv'):
 	#@param phenotypes_fname: Either path to a table containing phenotype/pathway codes or defaults to a filename in 
 	#MTX_utils/refs
@@ -54,7 +75,7 @@ def convert_mcSEED_from_module_format(mcSEED,standardize_categories=False,retain
 	#Reorder columns for consistency with Functional category/pathway formatted data
 	pathway_format_column_order = ['Isolate name','Locus tag','Protein name','Protein product',
 								'Functional category','Functional pathway','Phenotype']
-	if retain_max_phenotype:
+	if retain_max_phenotype and 'MaxPhenotypeValue' in mcSEED.columns:
 		pathway_format_column_order.append('MaxPhenotypeValue')
 	mcSEED = mcSEED[pathway_format_column_order]
 	return mcSEED
@@ -159,7 +180,7 @@ def _fix_phenotypes_and_pathways(mcSEED, mcSEED_phenotype_df):
 
 def load_mcSEED(mcSEED_fpath,mcSEED_phenotype_df=pd.DataFrame(),index_label='Locus tag',
 				fix_phenotypes_and_pathways=False,deduplicate_locus_tags=False,
-				retain_module_format=False):
+				retain_module_format=False,rename_columns={}):
 	"""Load mcSEED annotations into a standardized format from either functional category/pathway or module
 	formatted mcSEED annotation tables.
 
@@ -180,8 +201,10 @@ def load_mcSEED(mcSEED_fpath,mcSEED_phenotype_df=pd.DataFrame(),index_label='Loc
 	#Handle .csv or .tsv formatted annotation paths
 	if re.search(r'\.csv',mcSEED_fpath):
 		mcSEED = pd.read_csv(mcSEED_fpath)
-	elif re.search(r'\.tsv',mcSEED_fpath):
+	elif re.search(r'\.tsv',mcSEED_fpath) or re.search(r'\.txt',mcSEED_fpath):
 		mcSEED = pd.read_csv(mcSEED_fpath,sep='\t')
+	if len(rename_columns) > 0: #If provided, rename columns 
+		mcSEED = mcSEED.rename(columns=rename_columns)
 	#Automatically convert module format mcSEED tables - see above convert_mcSEED_from_module_format.
 	#Can be overriden with retain_module_format=True
 	if 'Module1' in mcSEED.columns and not retain_module_format:
@@ -392,8 +415,12 @@ def mcSEED_GSEA_heatmap(mcSEED_GSEA_df,pathway_col='pathway',organism_col='organ
 		heatmap_GSEA_data['NES_sig'] = heatmap_GSEA_data['NES_sig']
 	heatmap_GSEA_data_2D = heatmap_GSEA_data.pivot(index=pathway_col,columns=organism_col,values='NES_sig') #TODO finalize 
 	if len(subset_pathways) > 0:
+		#Filter subset_pathways in case of missing pathway values 
+		subset_pathways = [pathway for pathway in subset_pathways if pathway in heatmap_GSEA_data_2D.index]
 		heatmap_GSEA_data_2D = heatmap_GSEA_data_2D.loc[subset_pathways,:]
 	if len(subset_organisms) > 0:
+		#Filter subset_organisms in case of missing organism values
+		subset_organisms = [organism for organism in subset_organisms if organism in heatmap_GSEA_data_2D.columns]
 		heatmap_GSEA_data_2D = heatmap_GSEA_data_2D.loc[:,subset_organisms]
 	fig,ax = plt.subplots(1,1,figsize=(6,6))
 	ax = sns.heatmap(heatmap_GSEA_data_2D,cmap=cmap,cbar=True,
