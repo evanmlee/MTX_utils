@@ -2,9 +2,10 @@
 
 """
 benchmarking.py
-Utility functions for benchmarking TPR and FPR of MTX differential expression testing on Zhang et al. synthetic data.
+Utility functions for benchmarking TPR and FPR of MTX differential expression testing 
+on Zhang et al. synthetic data and in vitro mock communities. 
 Evan Lee
-Last update: 09/12/23 
+Last update: 04/03/25
 """
 
 ###====================================================================================###
@@ -32,19 +33,36 @@ default_MTX_FPR_cmap = MTX_colors.MTX_FPR_cmap
 ###====================================================================================###
 # Standardized functions for loading and manipulating statistical test results from various methods.  
 #Standard synth output directory structure is assumed to be:  
-#/synth_DE_output (or base_output_dir)
-#   /Zhang_M1
-#       /strict
-#           /null-bug #datasets 
-#           /true-exp #datasets 
-#           /... #datasets 
-#       /lenient #same datset hierarchy 
-#   /Zhang_M5 #same structure as Zhang_M1
-#   /Zhang_M6 #same structure as Zhang_M1
-#   /DESeq2
-#       /DESeq2_CSS_gene
-#           /null-bug #datasets
-#           /... #datasets
+# synth_DE_output (or base_output_dir)
+# ├── Zhang_M1
+# │ ├── strict
+# │ │ ├── null-bug #datasets  
+# │ │ ├── ... #datasets 
+# │ ├── lenient 
+# ├── Zhang_M5 #same structure as Zhang_M1
+# ├── Zhang_M6 #same structure as Zhang_M1
+# ├── DESeq2
+# │ ├── DESeq2_CSS_none
+# │ │ ├── null-bug #datasets
+# │ │ ├── ... 
+# │ ├── DESeq2_TSS_none
+
+# Mock community directory structure is as follows: 
+# method_output
+# ├── DA_comparisons
+# │ ├── DESeq2
+# │ │ ├── DESeq2_CSS_none
+# │ │ │ ├── Pco0-Pco0 #datasets
+#           ...
+# │ │ ├── DESeq2_TSS_none
+# │ ├── MPRAnalyze
+# │ │ ├── MPRAnalyze_TSS_mgx
+# │ │ ├── MPRAnalyze_mgx
+# │ └── MTXmodel
+# │     └── Zhang_M6
+# │         ├── lenient
+# │         ├── strict
+
 def get_zhang_results_dir(model,dataset,rna_dna_filt='strict',base_output_dir="synth_DE_output"):
     #Standardized directory structure paths for synth DE output for Zhang models
     #See documentation for load_zhang_results 
@@ -88,7 +106,9 @@ def load_zhang_results(model,dataset,
                         results_fname="all_results.tsv",
                         rename_cols={},dropna_policy='retain',
                         filtered_metadata_list='all',
-                        invert_reference_direction=False,reference_replacement_dict={}):
+                        invert_reference_direction=False,reference_replacement_dict={},
+                        replace_zero_pval=True,zero_pval_value=2.225074e-308,
+                        pval_columns=['pval','qval','padj_all']):
     """Load Zhang model DE test results from model and dataset name using standardized directory structure.
 
     Parameters: 
@@ -145,6 +165,15 @@ def load_zhang_results(model,dataset,
                     " has not been overwritten.")
             else: 
                 results_df['value'] = results_df['value'].replace(reference_replacement_dict)
+    #0 handling in p-value columns 
+    if replace_zero_pval:
+        for col in pval_columns:
+            if col in results_df:
+                results_df[col] = results_df[col].replace(0,zero_pval_value)
+            elif col in rename_cols:
+                results_df[rename_cols[col]] = results_df[rename_cols[col]].replace(0,zero_pval_value)
+
+
     results_df = results_df.sort_values(qval_label)
     return results_df
 
@@ -154,7 +183,10 @@ def load_zhang_taxon_results(model,dataset,
                         results_fname="all_results.tsv",
                         rename_cols={},dropna_policy='retain',
                         padj_all=False,padj_all_method='fdr_bh',
-                        invert_reference_direction=False,reference_replacement_dict={}):
+                        invert_reference_direction=False,reference_replacement_dict={},
+                        replace_zero_pval=True,zero_pval_value=2.225074e-308,
+                        pval_columns=['pval','qval','padj_all']
+                        ):
     """Load Zhang model DE test results from model and dataset name using standardized directory structure
     for by-taxon MTXmodel runs. 
 
@@ -214,10 +246,15 @@ def load_zhang_taxon_results(model,dataset,
     if padj_all:
         #multipletests output [1]: pvals_corrected
         all_taxon_results['padj_all'] = multipletests(all_taxon_results['pval'],method=padj_all_method)[1] 
+    #Replace 0 p-vals/qvals 
+    if replace_zero_pval:
+        for col in pval_columns:
+            if col in all_taxon_results:
+                all_taxon_results[col] = all_taxon_results[col].replace(0,zero_pval_value)
+            elif col in rename_cols:
+                all_taxon_results[rename_cols[col]] = all_taxon_results[rename_cols[col]].replace(0,zero_pval_value)
+
     return all_taxon_results
-    # zhang_results_fpath = os.path.join(zhang_results_dir,results_fname)
-    # results_df = load_zhang_results_from_fpath(zhang_results_fpath,rename_cols=rename_cols,dropna_policy=dropna_policy)
-    # return results_df    
 
 def load_DESeq_results_from_fpath(results_fpath,rename_cols={},dropna_policy='retain'):
     results_df = pd.read_csv(results_fpath,index_col=0,sep='\t')
@@ -230,7 +267,9 @@ def load_DESeq_results_from_fpath(results_fpath,rename_cols={},dropna_policy='re
 def load_DESeq_results(model,dataset,
                         base_output_dir="synth_DE_output",
                         results_fname="all_results.tsv",
-                        rename_cols={},dropna_policy='retain'):
+                        rename_cols={},dropna_policy='retain',
+                        replace_zero_pval=True,zero_pval_value=2.225074e-308,
+                        pval_columns=['pvalue','padj','padj_all']):
     """Load DESeq2 DE test results from model and dataset name using standardized directory structure.
 
     Parameters: 
@@ -246,12 +285,26 @@ def load_DESeq_results(model,dataset,
     Example use: rename_cols={"padj":"qval","pvalue":"pval"} will rename the columns 'padj' and 'pvalue' to 'qval' and 'pval' 
     in the returned DataFrame. 
     @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
+    @param replace_zero_pval: bool, default True. If provided, substitute 0s in pval_columns. 
+        These result from p-values in DESeq2 which are below the minimum machine value for R. They cause 
+        problems for visualizing (e.g. volcano plots) or otherwise log-transforming p-values.
+    @param zero_pval_value: float, default 2.225074e*10**-308 (minimum float value for python). 
+        If replace_zero_pval=True, replace 0 entries in pval_columns. 
+    @param pval_columns: labels in all_results, default ['pvalue','padj']. If 
+        replace_zero_pval=True, these columns will have 0s subtituted with zero_pval_value. 
     will respectively filter out rows from test results using pandas dropna. 
     """
     DES_results_dir = get_DESeq_results_dir(model,dataset,base_output_dir=base_output_dir)
     DES_results_fpath = os.path.join(DES_results_dir,results_fname)
     results_df = load_DESeq_results_from_fpath(DES_results_fpath,rename_cols=rename_cols,
                                                 dropna_policy=dropna_policy)
+    #0 handling in p-value columns 
+    if replace_zero_pval:
+        for col in pval_columns:
+            if col in results_df:
+                results_df[col] = results_df[col].replace(0,zero_pval_value)
+            elif col in rename_cols:
+                results_df[rename_cols[col]] = results_df[rename_cols[col]].replace(0,zero_pval_value)
     return results_df
 
 def load_MPRAnalyze_results_from_fpath(results_fpath,rename_cols={},dropna_policy='retain'):
@@ -273,7 +326,10 @@ def load_MPRAnalyze_results_from_fpath(results_fpath,rename_cols={},dropna_polic
 def load_MPRAnalyze_results(model,dataset,
                         base_output_dir="synth_DE_output",
                         results_fname="all_results.tsv",
-                        rename_cols={},dropna_policy='retain'):
+                        rename_cols={},dropna_policy='retain',
+                        replace_zero_pval=True,zero_pval_value=2.225074e-308,
+                        pval_columns=['pval','fdr']
+                        ):
     """Load MPRAnalyze Comparative Analysis results for model and dataset name using 
     standardized directory structure.
 
@@ -291,16 +347,29 @@ def load_MPRAnalyze_results(model,dataset,
     in the returned DataFrame. 
     @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
     will respectively filter out rows from test results using pandas dropna. 
+    @param replace_zero_pval: bool, default True. If True, replace 0 values in pval_columns
+        with zero_pval_value (default is minimum python float value)
+    @param zero_pval_value: float, default 2.225074e*10**-308 (minimum float value for python). 
+        If replace_zero_pval=True, replace 0 entries in pval_columns. 
+    @param pval_columns: labels in all_results, default ['pvalue','padj']. If 
+        replace_zero_pval=True, these columns will have 0s subtituted with zero_pval_value. 
     """
     MPRAnalyze_results_dir = get_MPRAnalyze_results_dir(model,dataset,base_output_dir=base_output_dir)
     MPRA_results_fpath = os.path.join(MPRAnalyze_results_dir,results_fname)
     results_df = load_MPRAnalyze_results_from_fpath(MPRA_results_fpath,
                         rename_cols=rename_cols,dropna_policy=dropna_policy)
+    #0 handling in p-value columns 
+    if replace_zero_pval:
+        for col in pval_columns:
+            if col in results_df:
+                results_df[col] = results_df[col].replace(0,zero_pval_value)
+            elif col in rename_cols:
+                results_df[rename_cols[col]] = results_df[rename_cols[col]].replace(0,zero_pval_value)
     return results_df
 
 
 ###====================================================================================###
-### Summary Statistics - simulated data (Zhang)
+### Benchmarking - simulated data (Zhang)
 ###====================================================================================###
 
 def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.DataFrame(),dataset_name="",
@@ -493,8 +562,63 @@ def manual_ROC_AUC(ROC_df,steps_method='steps-post'):
     return auc 
 
 ###====================================================================================###
-### Summary Statistics - real in vitro datasets 
+### Benchmarking - real in vitro datasets 
 ###====================================================================================###
+
+def define_TP_TN_gene_sets(all_results,locus_prefix_filter='',
+                            tp_sig_col='padj',tn_sig_col='padj',
+                            logFC_col='log2FoldChange',
+                            TP_logFC_threshold=1,TN_logFC_threshold=0.5,
+                            alpha=0.05,replace_zero_pval=True,
+                            zero_pval_value=2.225074e-308,
+                            pval_columns=['pvalue','padj']):
+    """From a given differential expression results table, calculate true positive (TP)
+    and true negative (TN) gene sets. 
+
+    @param all_results: pd.DataFrame, required. Differential expression results table,
+        must contain labels specified by tpr_sig_col, fpr_sig_col, and logFC_col. 
+    @param locus_prefix_filter: str, optional. If provided, TP and TN gene sets will 
+        only contain genes which contain locus_prefix_filter. 
+    @param tpr_sig_col, fpr_sig_col, logFC_col: labels in all_results which will be used 
+        to apply significance and fold change thresholds to define TP and TN gene sets. 
+    @param TP_logFC_threshold: float, default 1.
+    @param TN_logFC_threshold: float, default 0.5.
+    @param alpha: float, default 0.05. 
+    @param replace_zero_pval: bool, default True. If True, replace 0 values in pval_columns
+        with zero_pval_value (default is minimum python float value)
+    @param zero_pval_value: float, default 2.225074e*10**-308 (minimum float value for python). 
+        If replace_zero_pval=True, replace 0 entries in pval_columns. 
+    @param pval_columns: labels in all_results, default ['pvalue','padj']. If 
+        replace_zero_pval=True, these columns will have 0s subtituted with zero_pval_value. 
+
+    """
+    #Do not modify all_result in place.  
+    all_results = all_results.copy()
+
+    #Filter by locus_prefix if provided:
+    if locus_prefix_filter:
+        all_results = all_results.loc[all_results.index.str.contains(locus_prefix_filter),:]
+
+    #Handle 0 p-values if replace_zero_pval is provided. Uses pval_columns 
+    # to determine which columns to replace zero values in .   
+    if replace_zero_pval:
+        for col in pval_columns: 
+            if col in all_results.columns:
+                all_results[col] = all_results[col] .replace(0,zero_pval_value)
+
+    #Definte TP and TN gene sets
+    #TP: |logFC| > TP_logFC_threshold AND tpr_sig_col <= alpha
+    true_pos = all_results[(np.abs(all_results[logFC_col])>TP_logFC_threshold) &
+                                (all_results[tp_sig_col]<=alpha)]\
+                            .sort_values(logFC_col,ascending=False)
+    true_pos['direction'] = np.sign(true_pos[logFC_col])
+    #TN: |logFC| < TN_logFC_threshold AND fpr_sig_col > alpha
+    true_neg = all_results[(np.abs(all_results[logFC_col])<TN_logFC_threshold) & 
+                                (all_results[tn_sig_col]>alpha)]\
+                            .sort_values(logFC_col,ascending=False)
+    true_neg['direction'] = np.sign(true_neg[logFC_col])
+    return true_pos, true_neg
+
 
 def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features,
                                             dataset_name="",model="",alpha=0.05,
@@ -542,6 +666,7 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
             tp_df = tp_df[np.sign(tp_df[results_sign_col])==true_sig_features.loc[tp_df.index,'direction']] #filter based on sign of coefficient
         tpr = len(tp_df)/n_true_sig
     else:
+        #if spike_tpr=True, assign np.nan for clarity (vs. a TPR of 0). 
         tpr = np.nan
     #Specificity and FPR calculation
     #Optional: if fpr_sig_col is not provided, use sig_col for FP alpha thresholding 
@@ -562,6 +687,26 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
 def pvalue_histogram(results_df,title='',sig_col='qval',hist_color=sns.color_palette("tab10")[0],
                     figsize=(4,4),ax=None,alpha=0.05,plot_uniform_level=True,hue_spiked=False,
                     spiked_features=pd.DataFrame()):
+    """Plot a histogram of P-values for differential expression results in results_df. 
+    Additional support is provided for separately hue-ing ground truth differentially 
+    expressed genes (hue_spiked, spiked_features).  
+
+    @param results_df: pd.DataFrame, required. Must contain 'sig_col' which will be used to 
+        generate the histogram. Index should be gene identifiers. 
+    @param sig_col: label in results_df, default 'qval'. Values across genes for plotting 
+        histogram.
+    @param hist_color: color (hexcode str or pyplot/seaborn color). Color of bars in histogram
+        or ground truth features if hue_spiked=True. 
+    @param figsize: tuple, default (4,4). If no matplotlib Axes provided, size for new figure.
+    @param ax: matplotlib Axes: if provided, draw on existing axes; otherwise make new figure. 
+    @param alpha: float, default 0.05. Significance level used to calculate expected number of
+        features per histogram bucket for uniform P-value histograms. 
+        Only used if plot_uniform_level=True.
+    @param hue_spiked: bool, default True. If True, requires spiked_features and separately 
+        hues bins for genes with ground truth DE (those in spiked_features) vs without DE. 
+    @param spiked_features: pd.DataFrame, optional. Required if hue_spiked=True, used to 
+        determine hue categories for ground truth DE vs no DE. 
+    """
     if not ax: 
         fig, ax = plt.subplots(figsize=figsize)
     pvalues = results_df[sig_col]
@@ -572,9 +717,7 @@ def pvalue_histogram(results_df,title='',sig_col='qval',hist_color=sns.color_pal
         ns_color = MTX_colors.NS_gray
         significant_palette = dict(zip([True,False],[hist_color,ns_color]))
         results_df_sig_annotated = results_df.copy()
-        # results_df_sig_annotated['significant'] = results_df_sig_annotated[sig_col]<=alpha
         results_df_sig_annotated['spiked'] = results_df_sig_annotated.index.isin(spiked_features.index)
-        # display(results_df_sig_annotated)
         sns.histplot(results_df_sig_annotated,x=sig_col,hue='spiked',hue_order=[True,False],
             palette=significant_palette,multiple='stack',bins=20,ax=ax)
 

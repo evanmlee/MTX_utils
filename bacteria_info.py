@@ -1,5 +1,6 @@
 import os, re 
 import pandas as pd 
+pd.options.mode.chained_assignment = None  # default='warn'
 from importlib import resources as impresources
 from Bio import SeqIO
 import matplotlib.pyplot as plt 
@@ -59,7 +60,7 @@ def convert_mcSEED_from_module_format(mcSEED,standardize_categories=False,retain
 
 	#Generate Functional pathway column from Module 2 entries for Carbohydrate metabolism
 	#and Module 3 entries for Amino acid metabolism, Vitamins, cofactors and micronutrients metabolism, Fermentation
-	carb_met_index = mcSEED[mcSEED['Functional category'].str.contains('Carbohydrate metabolism')].index
+	carb_met_index = mcSEED[mcSEED['Functional category'].str.contains('Carbohydrate')].index
 	non_carb_met_index = mcSEED[~(mcSEED.index.isin(carb_met_index))].index
 	mcSEED.loc[carb_met_index,'Functional pathway'] = mcSEED.loc[carb_met_index,'Module2']
 	mcSEED.loc[non_carb_met_index,'Functional pathway'] = mcSEED.loc[non_carb_met_index,'Module3']
@@ -288,6 +289,62 @@ def _get_unique_mcSEED_info_from_locus_annotations(locus_annotations):
 	return locus_categories, locus_pathways, locus_phts
 
 ###====================================================================================###
+### Merging annotations into gene-indexed tables (e.g. differential expression results)
+###====================================================================================###
+
+def merge_annotations(all_results,annotation_dfs=[],annotation_df_cols=[],
+						na_replace=False,na_replace_value="",merge_type='left'):
+	"""Merge sets of annotations (with column filtering) into an existing table. 
+	All input DataFrames must be indexed on gene identifiers. 
+	
+	@param all_results: pd.DataFrame, required. DataFrame indexed on gene identifiers. 
+		A copy of this DataFrame will have annotations merged in by index. 
+	@param annotations_df: array-like, default []. Must contain DataFrame objects 
+		indexed on gene identifiers which will be merged into all_results.
+	@param annotation_df_cols: array-like, default []. Must contain indexes/lists 
+		of labels for each DataFrame in annotation_dfs. Length of annotations_df 
+		must equal length of annotation_df_cols.
+	@param na_replace: bool, default False. If True, replace missing values with 
+		na_replace_value after merge (default empty string).
+	@param na_replace_value: default np.nan. If na_replace=True, replace missing entries 
+		for annotation with na_replace_value after merge. 
+	@param merge_type: str, {'left','right','inner'}, default 'left'. 
+		Passed to pandas.merge. Default behavior will not filter all_results if annotations
+		are missing, using other merge types is not recommended if more than one annotation_df
+		is being provided. 
+
+
+	@return annotated_results: Returns new DataFrame containing all information in all_results
+		plus merged annotations from annotation_dfs where annotations are available.
+	"""
+	#Not editing dataframe in place. 
+
+	annotated_results = all_results.copy()
+	if not len(annotation_dfs) == len(annotation_df_cols):
+		raise ValueError("Number of provided annotation_dfs must equal number \
+						of provided sets of columns from annotation_dfs.")
+	#For each provided annotation_df and set of columns to merge:
+	for i,annotation_df in enumerate(annotation_dfs):
+		#Warn if no index overlap between annotation_df and results. 
+		if len(annotation_df.index.isin(all_results.index)) == 0:
+			warnings.warn("One of provided annotation DataFrames does not have \
+				any overlapping genes with provided results DataFrame:")
+			display(annotation_df)
+		#Merge in the subset of columns from annotation_df specified in annotation_df_cols
+		annotations_cols_to_merge = annotation_df_cols[i]
+		annotation_subset_to_merge = annotation_df.loc[:,annotations_cols_to_merge]
+		annotated_results = annotated_results.merge(annotation_subset_to_merge,
+													left_index=True,right_index=True,
+													how=merge_type)
+		#Handle missing values - not enabled by default.
+		if na_replace:
+			annotated_results.loc[:,
+				annotations_cols_to_merge] = annotated_results.loc[:,annotations_cols_to_merge]\
+																.fillna(na_replace_value)
+	return annotated_results
+
+
+###====================================================================================###
 ### Functions utilizing bacterial genome .ffn (rRNA annotations, coding sequences)
 ###====================================================================================###
 
@@ -376,7 +433,8 @@ def filter_rRNA_loci_all_genomes(counts_df,genomes_dir='',rRNA_description_re_pa
 ###====================================================================================###
 
 def mcSEED_GSEA_heatmap(mcSEED_GSEA_df,pathway_col='pathway',organism_col='organism',NES_col='NES',
-	pval_col='padj',subset_pathways=[],subset_organisms=[],alpha=0.05,cmap_str='RdBu_r',vmin=-2,vmax=2):
+	pval_col='padj',subset_pathways=[],subset_organisms=[],alpha=0.05,cmap_str='RdBu_r',
+	vmin=-2,vmax=2,figsize=(6,6)):
 	"""Generate a heatmap encoding GSEA Normalized Enrichment Score (NES) and P-value information for 
 	mcSEED GSEA results with individual organisms as columns and pathways as rows. 
 
@@ -422,7 +480,7 @@ def mcSEED_GSEA_heatmap(mcSEED_GSEA_df,pathway_col='pathway',organism_col='organ
 		#Filter subset_organisms in case of missing organism values
 		subset_organisms = [organism for organism in subset_organisms if organism in heatmap_GSEA_data_2D.columns]
 		heatmap_GSEA_data_2D = heatmap_GSEA_data_2D.loc[:,subset_organisms]
-	fig,ax = plt.subplots(1,1,figsize=(6,6))
+	fig,ax = plt.subplots(1,1,figsize=figsize)
 	ax = sns.heatmap(heatmap_GSEA_data_2D,cmap=cmap,cbar=True,
 		vmin=vmin,vmax=vmax,xticklabels=True,yticklabels=True,linecolor='#000000',linewidths=0.5)
 	ax.set_facecolor(MTX_colors.NS_gray)

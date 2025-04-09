@@ -1,3 +1,15 @@
+#! /usr/bin/env python
+
+"""
+kallisto_data_utils.py
+Utility functions for processing kallisto/bowtie2 quantification outputs into
+counts tables (genes x samples). Also contains some generic data visualization
+functions (bar_swarmplot, volcano_plot, violin_stripplot) for plotting 
+quantitative data and DE results, respectively. 
+Evan Lee
+Last update: 04/03/25
+"""
+
 ###====================================================================================###
 # Imports 
 ###====================================================================================###
@@ -11,6 +23,7 @@ import sys
 import warnings
 
 import matplotlib.pyplot as plt 
+from matplotlib.lines import Line2D
 import seaborn as sns 
 from MTX_utils import bacteria_info, MTX_colors
 
@@ -19,7 +32,8 @@ from MTX_utils import bacteria_info, MTX_colors
 ###====================================================================================###
 ### Prepare kallisto counts x samples table:
 def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
-        kallisto_merged_table_fpath='',counts_type='est_counts',force_int=False,
+        kallisto_merged_table_fpath='',counts_type='est_counts',
+        force_int=False,int_method='rint',
         barcode_label='Barcode',samplename_label='SampleName'):
     '''Parse expected directory structure in kallisto_output_dir and generate a DataFrame mapping samples to kallisto counts. 
 
@@ -77,9 +91,18 @@ def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
     #Optional handling of float data from kallisto with force_int; np.ceil used to differentiate low confidence prob estimates (or low tpm)
     #from 0s. 
     if force_int:
+        #Warn if forcing int for tpms
         if counts_type == 'tpm':
             warnings.warn('Specified counts_type=tpm and force_int=True. Rounding TPMs to int, be aware this is not often desirable.')
-        kallisto_merged_counts_df = np.ceil(kallisto_merged_counts_df).astype(int)
+        #Default behavior: round to nearest integer to prevent low kallisto 
+        #pseudocounts (potential multi/mismapping) from rounding up. 
+        # Also supports ceil/floor if specified by int_method:
+        if int_method == 'ceil':
+            kallisto_merged_counts_df = np.ceil(kallisto_merged_counts_df).astype(int)
+        elif int_method == 'floor':
+            kallisto_merged_counts_df = np.floor(kallisto_merged_counts_df).astype(int)
+        else:
+            kallisto_merged_counts_df = np.rint(kallisto_merged_counts_df).astype(int)
 
     #Write results if kallisto_merged_table_fpath is provided.  
     if kallisto_merged_table_fpath:
@@ -120,7 +143,6 @@ def process_bowtie2_output(barcode_sample_df,bowtie2_output_dir,
         barcode_sample_df = barcode_sample_df.reset_index()
     if barcode_sample_df.index.name != barcode_label:
         barcode_sample_df = barcode_sample_df.set_index(barcode_label)
-
     #Find all barcode directories (each for one sample) in kallisto_output_dir
     all_barcode_files = [fname for fname in os.listdir(bowtie2_output_dir) \
                         if re.search(counts_file_name_suffix,fname)]
@@ -151,11 +173,11 @@ def process_bowtie2_output(barcode_sample_df,bowtie2_output_dir,
     #Write results if bowtie2_merged_table_fpath is provided
     if bowtie2_merged_table_fpath:
         if re.search(r'\.csv',bowtie2_merged_table_fpath):
-            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath)
+            bowtie2_merged_counts_df.to_csv(bowtie2_merged_table_fpath)
         elif re.search(r'\.tsv',bowtie2_merged_table_fpath):
-            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep='\t')
+            bowtie2_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep='\t')
         elif re.search(r'\.txt',bowtie2_merged_table_fpath):
-            kallisto_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep=' ')
+            bowtie2_merged_counts_df.to_csv(bowtie2_merged_table_fpath,sep=' ')
         else: 
             raise ValueError('kallisto_merged_table_fpath should be a .csv, .tsv, or .txt file path.')
     return bowtie2_merged_counts_df
@@ -350,12 +372,12 @@ def taxon_DE_fractions(results_df,bug_df,alpha=0.05,sig_label='qval',subset_to_t
     return bug_DE_fractions_df
 
 ###====================================================================================###
-### Data Visualization  
+### Data Visualization - generic visualization functions  
 ###====================================================================================###
 
 def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
-                hue_label='significant',
-                alpha=0.05,
+                hue_label='significant',alpha=0.05,
+                replace_zero_pval=True,zero_pval_value=2.225074e-308,
                 ax=None,figsize=(4,4),title='',
                 xlim=(-10,10),ylim=(-0.5,7),markersize=5,linewidth=0,
                 palette={True:sns.color_palette('colorblind')[0],False:MTX_colors.NS_gray},
@@ -380,6 +402,9 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
         results_df['direction_significant'] = (results_df[pval_label] <=alpha).astype(int)
         down_results = results_df.loc[(results_df[logFC_label] < 0)].index
         results_df.loc[down_results,'direction_significant'] = results_df.loc[down_results,'direction_significant']*-1
+
+    if replace_zero_pval:
+        results_df[pval_label] = results_df[pval_label].replace(0,zero_pval_value)
 
     results_df['log_pval'] = -np.log10(results_df[pval_label])
     #Volcano plot scatter
@@ -446,9 +471,88 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
             ax.get_legend().remove()
     return ax
 
-def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],phenotype_regexps=[],
+
+def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=None,
+                    bar_palette=MTX_colors.MG02_bar_palette.values(),
+                    swarm_palette=MTX_colors.MG02_point_palette.values(),
+                    bar_alpha=1,ax=None,
+                    show_legend=True):
+    if not ax: 
+        fig, ax = plt.subplots(figsize=figsize)
+    #barplot
+    ax = sns.barplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+                    palette=bar_palette,zorder=0,dodge=dodge,ax=ax,
+                    capsize=0.1,errorbar='sd',
+                    err_kws={'linewidth':0.5,'color':'#000000'},
+                    alpha=bar_alpha,
+                    legend=True)
+    #overlaid swarmplot 
+    ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=3.5)
+    # if ax.get_legend():
+    if show_legend:
+        sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
+    else:
+        ax.get_legend().remove()
+    #Set y minimum to 0 - deprecated in case horizontal barplot
+    # ymin,ymax  = ax.get_ylim()
+    # ax.set_ylim(0,ymax)
+    return ax
+
+###====================================================================================###
+### Data Visualization - application-specific visualization functions  
+###====================================================================================###
+
+def relative_abundance_barswarmplot(counts_df,sample_md,locus_prefix,x,hue=None,
+                                    sampleID_col='SampleID',
+                                    bar_palette=MTX_colors.MG02_bar_palette.values(),
+                                    swarm_palette=MTX_colors.MG02_point_palette.values(),
+                                    dodge=True,figsize=(8,4),order=None,hue_order=None,
+                                    bar_alpha=1,ax=None,
+                                    show_legend=True):
+    '''Generate a barswarmplot where bar/swarm values are the relative abundance of an organism, 
+    estimated as the fraction of counts from counts_df corresponding to genes containing locus_prefix. 
+
+    @param counts_df: pd.DataFrame, required. Expected format is genes as index, samples as columns. 
+        Values should be counts for each gene in each sample.
+    @param sample_md: pd.DataFrame, required. Must contain columns sampleID_col, 
+        x, and hue if specified. 
+    @locus_prefix: str, required. Must be a substring of gene identifiers with the assumption that 
+        only gene identifiers for the organism of interest contain locus_prefix.
+    @param x: label in sample_md, required. Determines sample metadata to use for x position 
+        grouping of relative abundance data.
+    @param hue: label in sample_md, optional. Determines sample metadata to use for color
+        grouping of relative abundance data.
+    @param sampleID_col: label in sample_md, default 'SampleID'. sample_md must contain 
+        all of the values in the columns of counts_df.
+    @param bar_palette, swarm_palette: dict, optional. If provided, all values of hue
+        in sample_md must be keys.   
+    @param dodge,order,hue_order: Passed to seaborn barplot/swarmplot by bar_swarmplot.  
+    @param bar_alpha: [0,1], default 1. Transparency for barplot, useful if using same 
+        palette for bar_palette and swarm_palette. 
+    @param ax: matplotlib Axes, default None. If provided plot will be added to that Axes. If 
+    @param show_legend: optional, default True. Whether to show or remove legend. 
+    
+    @return: matplotlib Axes with relative abundance data plotted as a barswarmplot. 
+    '''
+    RA_data = sample_md.copy()
+    if RA_data.index.name != sampleID_col:
+        RA_data.set_index(sampleID_col)
+    locus_prefix_counts = counts_df.loc[counts_df.index.str.contains(locus_prefix),:].sum()
+    
+    RA_col_label = 'relative_abundance'
+    RA_data[RA_col_label] = locus_prefix_counts/counts_df.sum()
+
+    ax = bar_swarmplot(RA_data,x=x,y=RA_col_label,hue=hue,
+                                           dodge=dodge,
+                                           bar_palette=bar_palette,
+                                           swarm_palette=swarm_palette,
+                                          figsize=figsize,bar_alpha=bar_alpha,ax=ax)
+    return ax 
+
+def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],phenotypes=[],
                             logFC_label='coef',pval_label='qval',alpha=0.1,violinplot_geneset='all',ax=None,
-                            ylim=(-10,10),markersize=5,figsize=(2,4)):
+                            ylim=(-10,10),markersize=5,figsize=(2,4),legend=False):
     '''Generate a violin stripplot of differential expression test results showing specific mcSEED annotated
     genes from specified strains and pathways. 
 
@@ -461,17 +565,21 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
     which will be used to identify specific genes to plot in the stripplot 
     @param strains: array-like, optional, default []. List of identifiers from the 'organism' column in bacteria_info. 
     Must contain at least one entry or a ValueError will be raised. 
-    @param phenotype_regexps: array-like, optional, default []. List of regular expressions which will be used to 
+    @param phenotypes: array-like, optional, default []. List of regular expressions which will be used to 
     match entries in the 'Phenotype' column of mcSEED. Each regular expression's set of matched genes will be 
     plotted as a separate hue (split into significant/non-significant test results) in the resulting plot. 
+    Each entry can be either a phenotype code or a '|' joined list of phenotypes which will be used as a single set. 
     @param logFC_label, pval_label: labels in results_df. Will be used as y-axis of violin/strip-plot and to hue genes
     by their significance 
+    @param legend: bool, default False. If True, generates a legend where each phenotype is paired with 
+    its corresponding color with an additional marker for gray dots corresponding to genes which 
+    did not meet significance. 
     '''
     #Do not propagate changes to original results DataFrame 
     all_results_df = all_results_df.copy() 
     #Helper variables for supplied lists of strains and phenotypes
     n_strains = len(strains)
-    n_phenotypes = len(phenotype_regexps)
+    n_phenotypes = len(phenotypes)
     bacteria_plot_order_dict = dict(zip(strains,range(len(strains)))) #For maintaining order of violin plots 
 
     #QC supplied values
@@ -507,8 +615,9 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
     #1. only those genes from mcSEED results matching one of the provided phenotype regular expressions
     #2. duplicate entries for locus tags/ DE test results that match multiple of the regular expressions 
     mcSEED_results_for_stripplot = pd.DataFrame(columns=mcSEED_results_df.columns)
-    for j,pht in enumerate(phenotype_regexps):
-        all_pht_loci = mcSEED[mcSEED['Phenotype'].str.contains(pht)]
+    for j,pht in enumerate(phenotypes):
+        pht_re = '{0};|{0}$'.format(pht)
+        all_pht_loci = mcSEED[mcSEED['Phenotype'].str.contains(pht_re)]
         pht_loci_in_mcSEED_results = mcSEED_results_df.loc[mcSEED_results_df.index.isin(all_pht_loci.index)]
 
         pht_loci_in_mcSEED_results['Phenotype'] = j + 1
@@ -529,29 +638,16 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
                                 alpha=alpha,ax=ax,violin_norm='area',
                                  legend=False,palette=mcSEED_palette,ylim=ylim,
                                  markersize=markersize,figsize=figsize)
-    return ax 
-
-def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=None,
-                    bar_palette=MTX_colors.MG02_bar_palette.values(),
-                    swarm_palette=MTX_colors.MG02_point_palette.values(),
-                    bar_alpha=1,ax=None,
-                    show_legend=True):
-    if not ax: 
-        fig, ax = plt.subplots(figsize=figsize)
-    #barplot
-    ax = sns.barplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
-                    palette=bar_palette,zorder=0,dodge=dodge,ax=ax,
-                    capsize=0.1,errorbar='sd',err_kws={'linewidth':1},alpha=bar_alpha,
-                    legend=True)
-    #overlaid swarmplot 
-    ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
-              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=3.5)
-    # if ax.get_legend():
-    if show_legend:
+    #Custom legend generation for significance + phenotypes
+    if legend:
+        #For each phenotype, generate dummy marker (Line2D with o marker and no line) using corresponding 
+        #mcSEED_palette color (j+1) 
+        legend_elements = [ Line2D([0], [0], marker='o', color='w', label=pht,
+                          markerfacecolor=mcSEED_palette[j+1], markersize=6) 
+                            for j,pht in enumerate(phenotypes)]
+        #Add NS legend element (NS.gray o marker)
+        legend_elements.append(Line2D([0], [0], marker='o', color='w', label='N.S.',
+                          markerfacecolor=MTX_colors.NS_gray, markersize=6))
+        ax.legend(handles=legend_elements, loc='upper right')
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
-    else:
-        ax.get_legend().remove()
-    #Set y minimum to 0 - deprecated in case horizontal barplot
-    # ymin,ymax  = ax.get_ylim()
-    # ax.set_ylim(0,ymax)
-    return ax
+    return ax 
