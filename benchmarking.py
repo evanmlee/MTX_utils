@@ -376,6 +376,7 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
                                             model="",print_output=False,
                                            significant_results={},alpha=0.05,sig_col="qval",
                                             fpr_sig_col="",skip_tpr=False,
+                                            include_ppv=True,
                                            check_direction=False,results_sign_col="coef"):
     """Determine basic summary statistics about statistical test results contained in all_results and the set of 
     true simulated DE spiked_features.
@@ -422,7 +423,11 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     else:
         raise ValueError("Provided alpha is outside of (0,1] range. Alternatively, provide significant_results.")   
     #Summary DataFrame initialization
-    summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR"]
+    #Making include_ppv an option to support old behavior in previous scripts 
+    if include_ppv:
+        summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR","PPV","NPV"]
+    else: 
+        summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR"]
     summary_df = pd.DataFrame(columns=summary_df_columns)
     #Number of tested and spiked features 
     n_tested, n_spiked = len(all_results),len(spiked_features)
@@ -430,6 +435,8 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     if not skip_tpr: #Use skip_tpr for 'null' datasets with no spiked features - assigns np.nan to tpr for clarity
         tp_df = all_results[(all_results.index.isin(spiked_features.index)) &
                            (all_results.index.isin(significant_results.index))] 
+        fn_df = all_results[(all_results.index.isin(spiked_features.index)) &
+                           ~(all_results.index.isin(significant_results.index))]
         if check_direction:
             if results_sign_col not in all_results or results_sign_col not in tp_df:
                 raise ValueError("Provided results_sign_col of {0} is not in all_results. Provide a valid column or set check_direction to False.".format(results_sign_col))
@@ -444,6 +451,11 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
                        ~(all_results.index.isin(fp_significant_results.index))]
     allneg_df = all_results[~(all_results.index.isin(spiked_features.index))]
     fpr = len(fp_df)/len(allneg_df)
+
+    #PPV (precision) calculation: 
+    ppv = len(tp_df)/(len(tp_df)+len(fp_df))
+    #NPV calculation:
+    npv = len(tn_df)/(len(tn_df)+len(fn_df))
     #Printed output
     if print_output:
         print("Dataset: {0}".format(dataset_name))
@@ -451,7 +463,13 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
         print("True positive rate: {:.3f}".format(tpr))
         print("False positive rate: {:.3f}".format(fpr))
         print("Number of tested features: {:.0f}".format(n_tested))
-    summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr]
+        if include_ppv:
+            print("Positive predictive value: {:.3f}".format(ppv))
+            print("Negative predictive value: {:.3f}".format(npv))
+    if include_ppv: #include ppv/npv metrics in output dataframe
+        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr,ppv,npv]
+    else:
+        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr]
     return summary_df
 
 def mannual_ROC_range(all_results,spiked_features,tpr_col='qval',fpr_col='',
@@ -623,6 +641,7 @@ def define_TP_TN_gene_sets(all_results,locus_prefix_filter='',
 def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features,
                                             dataset_name="",model="",alpha=0.05,
                                             sig_col="qval",fpr_sig_col="",skip_tpr=False,
+                                            include_ppv=True,
                                            check_direction=True,results_sign_col="coef"):
     """Determine basic summary statistics about statistical test results contained in all_results. 
     Requires pre-defined lists of true_sig_features and true_ns_features from which TPR and FPR will be calculated.
@@ -643,6 +662,8 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
     @param fpr_sig_col: name of variable in all_results, optional. If provided, a separate column in all_results 
     (e.g. uncorrected P-values) will be used to determine false positive calls for significance. 
     Default empty string.
+    @param include_ppv: bool, default True. If True, provide positive predictive 
+        and negative predictivevalue calculations in returned summary DataFrame. 
     @param check_direction: boolean, optional. If provided, true positives must have positive/negative directionality
     in the column specified by results_sign_col corresponding to 'direction' in the spiked_features DataFrame. 
     @param results_sign_col: name of variable in all_results, optional. If check_direction is True, signs of values 
@@ -651,15 +672,20 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
     """
     
     #Summary DataFrame initialization
-    summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR']
+    if include_ppv:
+        summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR','PPV','NPV']
+    else:
+        summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR']
     summary_df = pd.DataFrame(columns=summary_df_columns)
     #Number of tested and spiked features 
     n_tested, n_true_sig,n_true_ns = len(all_results),len(true_sig_features),len(true_ns_features)
     #Sensitivity calculation (TPR)
     if not skip_tpr: #Use skip_tpr for 'null' datasets with no spiked features - assigns np.nan to tpr for clarity
         #TPs: those with sig_col < alpha AND in true_sig_features
-        tp_df = all_results[(all_results[sig_col]<alpha) & \
+        tp_df = all_results[(all_results[sig_col]<=alpha) & \
                             (all_results.index.isin(true_sig_features.index))] 
+        fn_df = all_results[(all_results[sig_col]>alpha) & \
+                            (all_results.index.isin(true_sig_features.index))]
         if check_direction:
             if results_sign_col not in all_results or results_sign_col not in tp_df:
                 raise ValueError("Provided results_sign_col of {0} is not in all_results. Provide a valid column or set check_direction to False.".format(results_sign_col))
@@ -673,11 +699,22 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
     if fpr_sig_col == '':
         fpr_sig_col = sig_col
     #FPs: those with sig_col < alpha AND in true_ns_features
-    fp_df = all_results[(all_results[fpr_sig_col]<alpha) & \
+    fp_df = all_results[(all_results[fpr_sig_col]<=alpha) & \
                         (all_results.index.isin(true_ns_features.index))] 
+    tn_df = all_results[(all_results[fpr_sig_col]>alpha) & \
+                        (all_results.index.isin(true_ns_features.index))]
     fpr = len(fp_df)/n_true_ns
-    #Printed output
-    summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr]
+
+    #PPV (precision) calculation: 
+    ppv = len(tp_df)/(len(tp_df)+len(fp_df))
+    #NPV calculation:
+    npv = len(tn_df)/(len(tn_df)+len(fn_df))
+    
+    #Return summary df with metrics
+    if include_ppv:
+        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr,ppv,npv]
+    else:
+        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr]
     return summary_df
 
 ###====================================================================================###
