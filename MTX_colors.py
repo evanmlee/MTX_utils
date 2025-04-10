@@ -50,8 +50,12 @@ MTX_cubehelix_cmap1 = sns.cubehelix_palette(start=.5, rot=-.5, as_cmap=True)
 MTX_cubehelix_cmap2 = sns.cubehelix_palette(start=1.5, rot=-.5, as_cmap=True)
 MTX_cubehelix_cmap3 = sns.cubehelix_palette(start=1.2, rot=.3, as_cmap=True)
 
+#Heatmap palettes for TPR/FPR/PPV/NPV
 MTX_TPR_cmap = sns.color_palette("magma", as_cmap=True)
 MTX_FPR_cmap = sns.color_palette("viridis", as_cmap=True)
+
+MTX_PPV_cmap = sns.color_palette("flare_r", as_cmap=True)
+MTX_NPV_cmap = sns.color_palette("crest_r", as_cmap=True)
 
 MTX_TPR_soft_cmap = sns.color_palette("rocket", as_cmap=True)
 MTX_FPR_soft_cmap = sns.color_palette("mako", as_cmap=True)

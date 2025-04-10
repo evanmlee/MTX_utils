@@ -452,10 +452,16 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     allneg_df = all_results[~(all_results.index.isin(spiked_features.index))]
     fpr = len(fp_df)/len(allneg_df)
 
-    #PPV (precision) calculation: 
-    ppv = len(tp_df)/(len(tp_df)+len(fp_df))
-    #NPV calculation:
-    npv = len(tn_df)/(len(tn_df)+len(fn_df))
+    #Calculate PPV and NPV 
+    if not skip_tpr: #For null-XX datasets, skip ppv and npv
+    #no spiked features and therefore no tp_df or fn_df. 
+        #PPV (precision) calculation: 
+        ppv = len(tp_df)/(len(tp_df)+len(fp_df))
+        #NPV calculation:
+        npv = len(tn_df)/(len(tn_df)+len(fn_df))
+    else: #for null datasets, these metrics are undefined. 
+        ppv = np.nan 
+        npv = np.nan
     #Printed output
     if print_output:
         print("Dataset: {0}".format(dataset_name))
@@ -767,41 +773,65 @@ def pvalue_histogram(results_df,title='',sig_col='qval',hist_color=sns.color_pal
  
 
 def tpr_fpr_heatmaps(summary_df,x,y,
+                    tpr_col='TPR',fpr_col='FPR',
                     ordered_pivot_x=[],ordered_pivot_y=[],
                     figures_dir="figures_pdf",figure_fpath_basename="",
-                    tpr_cmap=default_MTX_TPR_cmap,fpr_cmap=default_MTX_FPR_cmap,
-                    tpr_vmax=1,fpr_vmax=1,precision_decimals=None,
-                    na_facecolor="#BBBBBB",annot=True,xlabel="",ylabel="",
+                    tpr_cmap=MTX_colors.MTX_TPR_cmap,
+                    fpr_cmap=MTX_colors.MTX_FPR_cmap,
+                    tpr_vmax=1,fpr_vmax=1,annot=True,precision_decimals=None,
+                    na_facecolor="#BBBBBB",xlabel="",ylabel="",
+                    titles=['True Positive Rate','False Positive Rate'],
                     subplot=False,figsize=(8,4)):
-    """Generate basic heatmap visualization for true positive rate and false positive rates returned by zhang_significant_spiked_correspondence.
+    """Generate basic heatmap visualization for true positive rate and false 
+        positive rates for synthetic or in vitro (mock community) data.
 
     Parameters:
-    @param summary_df: Required, pd.DataFrame. Must have columns specified by x and y as well as 'TPR' and 'FPR'
-    @param x, y: Required, names of variables in summary_df. Will be used as x and y axes in heatmap 
-    
-    @param ordered_pivot_x, ordered_pivot_y: Array-like or pd.Index, optional. Correspond to values in summary_df in columns x and y respectively.
+    @param summary_df: Required, pd.DataFrame. Must have columns specified by 
+        x and y as well as 'TPR' and 'FPR'
+    @param x, y: Required, labels in summary_df. Will be used as x and y axes 
+        in heatmap. 
+    @param tpr_col, fpr_col: labels in summary_df, default 'TPR' and 'FPR'. 
+        Columns of summary_df to use for TPR and FPR in heatmaps, can
+        supply as arguments if labels differ from those defined in other 
+        benchmarking functions.
+    @param ordered_pivot_x, ordered_pivot_y: Array-like or pd.Index, optional. 
+        Correspond to values in summary_df in columns x and y respectively.
         If provided, will filter/sort entries for x and y using .loc
-    @param figures_dir: str, optional, default='figures_pdf'. Path to directory where figures will be saved. Created if doesn't exist. 
-    @param figure_fpath_basename: str, optional, default=''. Figures will be saved to path {figures_dir}/{figure_fpath_basename}_{TPR/FPR}.pdf
-    @param tpr_cmap, fpr_cmap: seaborn ColorMap objects, optional. color maps used for TPR and FPR heatmaps, 
-        default to seaborn rocket and viridis
-    @param tpr_vmax, fpr_vmax: float [0,1], optional. If provided, used as vmax argument in respective heatmaps for TPR and FPR
-    @param precision_decimals: None or int. If provided, will round to the provided number of decimals.  
-    @param na_facecolor: str, color hexcode or pyplot color abbreviation. Default="#BBBBBB". Fill in color for na entries in 'TPR' or 'FPR'
+    @param figures_dir: str, optional, default='figures_pdf'. Path to directory
+         where figures will be saved. Created if doesn't exist. 
+    @param figure_fpath_basename: str, optional, default=''. Figures will be 
+        saved to path {figures_dir}/{figure_fpath_basename}_{TPR/FPR}.pdf
+    @param tpr_cmap, fpr_cmap: seaborn ColorMap objects, optional. color maps 
+        used for TPR and FPR heatmaps, default to seaborn magma and viridis. 
+    @param tpr_vmax, fpr_vmax: float [0,1], default 1. If provided, used as 
+        vmax argument in respective heatmaps for TPR and FPR
+    @param annot: bool, default True. If True, annotate TPR and FPR values 
+        as text over each cell of heatmaps. Passed to sns.heatmap. 
+    @param precision_decimals: None or int, default None. If provided, will 
+        round to the provided number of decimals for annotated values. 
+    @param na_facecolor: str, color hexcode or pyplot color abbreviation. 
+        Default="#BBBBBB". Fill in color for na entries in 'TPR' or 'FPR'
         e.g. for TPR in 'null' datasets with no spiked features 
-    @param annot: boolean, optional. Default=True. Passed to sns.heatmap, controls text annotation of TPR/FPR onto heatmap cells. 
-    @param subplot: boolean, optional. Default=False. If true, save TPR and FPR heatmaps as vertically arranged in one condensed figure. 
+    @param subplot: boolean, optional. Default=False. If true, save TPR 
+        and FPR heatmaps as vertically arranged in one condensed figure. 
 
     """
+    #Make copy so no edits passed through to original summary DataFrame. 
+    summary_df = summary_df.copy() 
     #Convert TPR and FPR to floats for data type compatibility with seaborn 
-    summary_df.loc[:,'TPR'] = summary_df.loc[:,'TPR'].astype('float')
-    summary_df.loc[:,'FPR'] = summary_df.loc[:,'FPR'].astype('float')
+    summary_df.loc[:,tpr_col] = summary_df.loc[:,tpr_col].astype('float')
+    summary_df.loc[:,fpr_col] = summary_df.loc[:,fpr_col].astype('float')
     if precision_decimals:
-        summary_df.loc[:,'TPR'] = np.round(summary_df.loc[:,'TPR'].astype('float'),decimals=precision_decimals)
-        summary_df.loc[:,'FPR'] = np.round(summary_df.loc[:,'FPR'].astype('float'),decimals=precision_decimals)
+        summary_df.loc[:,tpr_col] = np.round(summary_df.loc[:,tpr_col]\
+                                    .astype('float'),decimals=precision_decimals)
+        summary_df.loc[:,fpr_col] = np.round(summary_df.loc[:,fpr_col]\
+                                    .astype('float'),decimals=precision_decimals)
     #Pivot summary_df
-    summary_tpr_pivot = summary_df.pivot(index=y,columns=x,values="TPR")#.astype('float') #x and y-axes in heatmap correspond to columns and index in pivot oops :tweak face: 
-    summary_fpr_pivot = summary_df.pivot(index=y,columns=x,values="FPR")#.astype('float')
+    #x and y-axes in heatmap correspond to columns and index in pivot oops :tweak face: 
+    # This results in intended behavior based on 
+    # the parameter names (i.e. x col label -> x axis) 
+    summary_tpr_pivot = summary_df.pivot(index=y,columns=x,values=tpr_col)
+    summary_fpr_pivot = summary_df.pivot(index=y,columns=x,values=fpr_col)
     #Reorder rows/ columns of pivot/heatmap if specified 
     if ordered_pivot_x:
         summary_tpr_pivot = summary_tpr_pivot.loc[:,ordered_pivot_x]
@@ -817,35 +847,96 @@ def tpr_fpr_heatmaps(summary_df,x,y,
         fig1, ax1 = plt.subplots(1,1,figsize=figsize)
         fig2, ax2 = plt.subplots(1,1,figsize=figsize)
     #Heatmap calls for TPR and FPR pivots
-    sns.heatmap(summary_tpr_pivot,annot=annot,vmin=0,vmax=tpr_vmax,cmap=tpr_cmap,ax=ax1)
-    sns.heatmap(summary_fpr_pivot,annot=annot,vmin=0,vmax=fpr_vmax,cmap=fpr_cmap,ax=ax2)
-    ax1.set_facecolor(na_facecolor) #Fill in na values in both heatmaps 
-    ax2.set_facecolor(na_facecolor)
-    ax1.set_title("True Positive Rate")
-    ax2.set_title("False Positive Rate")
-    #Custom axes labels if provided 
-    if xlabel:
-        ax1.set_xlabel(xlabel)
-        ax2.set_xlabel(xlabel)
-    if ylabel:
-        ax1.set_ylabel(ylabel)
-        ax2.set_ylabel(ylabel)
-
+    for pivot_df, ax, vmax, cmap,title in zip([summary_tpr_pivot,summary_fpr_pivot],
+                                        [ax1,ax2],
+                                        [tpr_vmax,fpr_vmax],
+                                        [tpr_cmap,fpr_cmap],
+                                        titles):
+        sns.heatmap(pivot_df,annot=annot,vmin=0,vmax=vmax,cmap=cmap,ax=ax)
+        ax.set_facecolor(na_facecolor)
+        ax.set_title(title)
+        #Custom axes labels if provided:
+        if xlabel:
+            ax.set_xlabel(xlabel)
+        if ylabel:
+            ax.set_ylabel(ylabel)
     #Save figure - set up figure directory and use plt.savefig 
     os.makedirs(figures_dir,exist_ok=True)
     #Figure paths depending on if subplots (combined figure) or separate. 
     if subplot:
-        heatmap_fpath = os.path.join(figures_dir,"{0}_TPR-FPR.pdf".format(figure_fpath_basename))
+        heatmap_fpath = os.path.join(figures_dir,"{0}_{1}-{2}.pdf".format(figure_fpath_basename,
+                                                                        tpr_col,fpr_col))
         #Delete redundant xtick labels in TPR heatmap
         ax1.set_xlabel("")
         ax1.set_xticklabels([])
         #Save figure 
         fig1.savefig(heatmap_fpath,dpi=300,facecolor='white',bbox_inches='tight')
     else: 
-        tpr_heatmap_fpath = os.path.join(figures_dir,"{0}_TPR.pdf".format(figure_fpath_basename))
-        fpr_heatmap_fpath = os.path.join(figures_dir,"{0}_FPR.pdf".format(figure_fpath_basename))
+        tpr_heatmap_fpath = os.path.join(figures_dir,"{0}_{1}.pdf".format(figure_fpath_basename,tpr_col))
+        fpr_heatmap_fpath = os.path.join(figures_dir,"{0}_{1}.pdf".format(figure_fpath_basename,fpr_col))
         fig1.savefig(tpr_heatmap_fpath,dpi=300,facecolor='white',bbox_inches='tight')
         fig2.savefig(fpr_heatmap_fpath,dpi=300,facecolor='white',bbox_inches='tight')
+
+def ppv_npv_heatmaps(summary_df,x,y,
+                    ppv_col='PPV',npv_col='NPV',
+                    ordered_pivot_x=[],ordered_pivot_y=[],
+                    figures_dir="figures_pdf",figure_fpath_basename="",
+                    ppv_cmap=MTX_colors.MTX_PPV_cmap,
+                    npv_cmap=MTX_colors.MTX_NPV_cmap,
+                    ppv_vmax=1,npv_vmax=1,annot=True,precision_decimals=None,
+                    na_facecolor="#BBBBBB",xlabel="",ylabel="",
+                    subplot=False,figsize=(8,4)):
+    """Generate basic heatmap visualization for positive predictive value 
+        and negative predictive value for synthetic or in vitro (mock community) data.
+        This basically wraps tpr_fpr_heatmaps but configures default parameters 
+        for labels and color palettes to ensure consistency. 
+
+    Parameters:
+    @param summary_df: Required, pd.DataFrame. Must have columns specified by 
+        x and y as well as 'PPV' and 'NPV'
+    @param x, y: Required, labels in summary_df. Will be used as x and y axes 
+        in heatmap. 
+    @param ppv_col, npv_col: labels in summary_df, default 'PPV' and 'NPV'. 
+        Columns of summary_df to use for PPV and NPV in heatmaps, can
+        supply as arguments if labels differ from those defined in other 
+        benchmarking functions.
+    @param ordered_pivot_x, ordered_pivot_y: Array-like or pd.Index, optional. 
+        Correspond to values in summary_df in columns x and y respectively.
+        If provided, will filter/sort entries for x and y using .loc
+    @param figures_dir: str, optional, default='figures_pdf'. Path to directory
+         where figures will be saved. Created if doesn't exist. 
+    @param figure_fpath_basename: str, optional, default=''. Figures will be 
+        saved to path {figures_dir}/{figure_fpath_basename}_{PPV/NPV}.pdf
+    @param ppv_cmap, npv_cmap: seaborn ColorMap objects, optional. color maps 
+        used for PPV and NPV heatmaps, default to seaborn flare_r and crest_r. 
+    @param ppv_vmax, npv_vmax: float [0,1], default 1. If provided, used as 
+        vmax argument in respective heatmaps for PPV and NPV. 
+    @param annot: bool, default True. If True, annotate PPV and NPV values 
+        as text over each cell of heatmaps. Passed to sns.heatmap. 
+    @param precision_decimals: None or int, default None. If provided, will 
+        round to the provided number of decimals for annotated values. 
+    @param na_facecolor: str, color hexcode or pyplot color abbreviation. 
+        Default="#BBBBBB". Fill in color for na entries in 'PPV' or 'NPV'
+        e.g. for TPR in 'null' datasets with no spiked features 
+    @param subplot: boolean, optional. Default=False. If true, save TPR 
+        and FPR heatmaps as vertically arranged in one condensed figure. 
+
+    """
+    #Call TPR_FPR heatmaps but specify col labels and default palettes for PPV and NPV
+    # specific defaults. Pass rest of arguments from ppv_npv_heatmaps. 
+    tpr_fpr_heatmaps(summary_df,x,y,
+                    ordered_pivot_x=ordered_pivot_x,
+                    ordered_pivot_y=ordered_pivot_y,
+                    tpr_col=ppv_col,fpr_col=npv_col,
+                    figures_dir=figures_dir,
+                    figure_fpath_basename=figure_fpath_basename,
+                    tpr_cmap=ppv_cmap,
+                    fpr_cmap=npv_cmap,
+                    tpr_vmax=ppv_vmax,fpr_vmax=npv_vmax,annot=annot,
+                    precision_decimals=precision_decimals,
+                    na_facecolor=na_facecolor,xlabel=xlabel,ylabel=ylabel,
+                    titles=['Positive Predictive Value','Negative Predictive Value'],
+                    subplot=subplot,figsize=figsize)
 
 
 def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
@@ -870,7 +961,7 @@ def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.axis("square")
-    return roc_df
+    return roc_df,tpr,fpr,thresholds
 
 def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,score_col='qval',
                                     dataset_name="",plot_chance_level=True,palette=[],ax=None):
