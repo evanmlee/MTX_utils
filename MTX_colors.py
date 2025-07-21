@@ -9,7 +9,8 @@ import seaborn as sns
 #https://www.practicalpythonfordatascience.com/ap_seaborn_palette
 
 NS_gray = '#BBBBBB'
-S_gray = '#888888'
+violinstrip_NS_gray = '#AAAAAA'
+S_gray = '#555555'
 
 #seaborn colorblind palette subset 
 ten_colorblind = sns.color_palette('colorblind')
@@ -24,6 +25,7 @@ gradient_five_red = ['#FFB3AF','#FF7A6E','#EB321B','#BE1900','#821800']
 gradient_five_blue = ['#9FC9EB','#62ABF0','#147EE0','#0059B8','#001987']
 gradient_five_green = ["#4DFF97","#00FF6A","#00CC55","#189E50","#00712F"]
 gradient_five_gray = ["#DEDEDE","#C4C4C4","#A1A1A1","#787878","#444444"]
+gradient_five_gray_alt = ["#CCCCCC","#AAAAAA","#999999","#666666","#222222"]
 
 
 five_blue_variant = ["#9FC9EB","#5299C7","#168FFF","#0153DA","#001C96"]
@@ -55,10 +57,15 @@ MTX_TPR_cmap = sns.color_palette("magma", as_cmap=True)
 MTX_FPR_cmap = sns.color_palette("viridis", as_cmap=True)
 
 MTX_PPV_cmap = sns.color_palette("flare_r", as_cmap=True)
-MTX_NPV_cmap = sns.color_palette("crest_r", as_cmap=True)
+MTX_NPV_cmap = sns.color_palette("crest", as_cmap=True)
 
 MTX_TPR_soft_cmap = sns.color_palette("rocket", as_cmap=True)
 MTX_FPR_soft_cmap = sns.color_palette("mako", as_cmap=True)
+
+#Some alternative mono-chromatic heatmap palettes:
+MTX_red_light_cmap = sns.color_palette("light:salmon_r", as_cmap=True)
+MTX_blue_light_cmap = sns.color_palette("light:b_r", as_cmap=True)
+
 
 ###################################################################
 #	 Colors/ palettes related to BG04 - in vitro cross-feeding    #

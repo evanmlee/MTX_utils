@@ -136,6 +136,57 @@ def bug_filter_data(bugs,datasets):
         bug_filtered_datasets[bug] = filtered_datasets
     return bug_filtered_datasets
 
+def format_original_synth_datasets(mgx_original, bug_original, mtx_original):
+    """
+    Format synthetic datasets from Zhang et al. for compatibility with various methods.
+
+    Takes input mgx and mtx abundance data of gene-level counts as genes x 
+        samples, extracts metadata and returns counts only mgx/mtx data 
+        and metadata as DataFrames. 
+    @param mgx_original, mtx_original: pd.DataFrame, required. Gene-level 
+        counts data and 'Phenotype' and 'SeqDepth' metadata, genes x samples. 
+    @param bug_original: pd.DataFrame, optional. Genome-level counts data
+        and 'Phenotype' and 'SeqDepth' metadata, rows x samples. 
+    
+    @return mgx_df, mtx_df: pd.DataFrame. Gene-level counts data without 
+        metadata features.
+    @return bug_df: pd.DataFrame
+    @return metadata_df: pd.DataFrame, contains features 'Phenotype', 
+        'MGX_SeqDepth', and 'MTX_SeqDepth'. 
+    """
+    metadata_df = pd.DataFrame(index=["Phenotype","MGX_SeqDepth","MTX_SeqDepth"],
+                           columns=mtx_original.columns)
+    metadata_df.loc[["Phenotype"],:] = mgx_original.loc[["Phenotype"]]
+    metadata_df.loc[["MGX_SeqDepth"],:] = mgx_original.loc[["SeqDepth"],:].values
+    metadata_df.loc[["MTX_SeqDepth"],:] = mtx_original.loc[["SeqDepth"],:].values
+    #Remove metadata features from counts tables
+    mgx_df = mgx_original.drop(index=["Phenotype","SeqDepth"])
+    bug_df = bug_original.drop(index=["Phenotype","SeqDepth"])
+    mtx_df = mtx_original.drop(index=["Phenotype","SeqDepth"])
+    #Remove index/column names from original Zhang data (each index is named #)
+    mgx_df = mgx_df.rename_axis(None, axis=0)
+    mtx_df = mtx_df.rename_axis(None, axis=0)
+    bug_df = bug_df.rename_axis(None, axis=0)
+    mgx_df = mgx_df.rename_axis(None, axis=1)
+    mtx_df = mtx_df.rename_axis(None, axis=1)
+    bug_df = bug_df.rename_axis(None, axis=1)
+
+    return mgx_df,bug_df, mtx_df, metadata_df
+
+def generate_mgx_bug_abunds(mgx_df,bug_df):
+    """Generate a gene-level DataFrame (mgx_bug_abunds) where values are genome-level
+        abundances. Needed for MTXmodel M5 as dna_input_data. 
+    """
+    mgx_bug_df = pd.DataFrame(index=mgx_df.index,columns=mgx_df.columns)
+    for bug in bug_df.index:
+        bug_data = bug_df.loc[bug,:] 
+        mgx_bug_features = mgx_df.index[mgx_df.index.str.contains(bug)]
+        mgx_bug_fill = pd.concat([bug_data]*len(mgx_bug_features),axis=1).T
+        mgx_bug_fill.index = mgx_bug_features
+        mgx_bug_df.loc[mgx_bug_features,:] = mgx_bug_fill
+    return mgx_bug_df
+
+
 ###====================================================================================###
 ### Data Filtering   
 ###====================================================================================###

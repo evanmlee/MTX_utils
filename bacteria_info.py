@@ -8,6 +8,10 @@ import seaborn as sns
 from MTX_utils import MTX_colors
 from . import refs
 
+#Default Values for Locus Prefixes for P. copri and E. coli
+SECO_LOCUS_PREFIX = 'SECOE6D84F6F'
+ESCO_LOCUS_PREFIX = 'ESCO1651AAE9'
+
 ###====================================================================================###
 ### Load Bacteria Information (locus prefixes, annotations)   
 ###====================================================================================###

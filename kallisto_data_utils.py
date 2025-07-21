@@ -10,9 +10,9 @@ Evan Lee
 Last update: 04/03/25
 """
 
-###====================================================================================###
+###============================================================================###
 # Imports 
-###====================================================================================###
+###============================================================================###
 
 import pandas as pd
 import numpy as np
@@ -21,15 +21,17 @@ import re
 import warnings
 import sys 
 import warnings
+from scipy import stats
 
 import matplotlib.pyplot as plt 
 from matplotlib.lines import Line2D
 import seaborn as sns 
 from MTX_utils import bacteria_info, MTX_colors
 
-###====================================================================================###
+
+###============================================================================###
 ### Kallisto Output Processing 
-###====================================================================================###
+###============================================================================###
 ### Prepare kallisto counts x samples table:
 def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
         kallisto_merged_table_fpath='',counts_type='est_counts',
@@ -117,9 +119,9 @@ def process_kallisto_output(barcode_sample_df,kallisto_output_dir,
             raise ValueError('kallisto_merged_table_fpath should be a .csv, .tsv, or .txt file path.')
     return kallisto_merged_counts_df
 
-###====================================================================================###
+###============================================================================###
 ### Bowtie2/Samtools Counts Processing 
-###====================================================================================###
+###============================================================================###
 def process_bowtie2_output(barcode_sample_df,bowtie2_output_dir,
         counts_file_name_suffix='_microbial.txt',
         bowtie2_merged_table_fpath='',counts_type='est_counts',
@@ -183,9 +185,9 @@ def process_bowtie2_output(barcode_sample_df,bowtie2_output_dir,
     return bowtie2_merged_counts_df
 
 
-###====================================================================================###
+###============================================================================###
 # Processed Output Loading 
-###====================================================================================###
+###============================================================================###
 def load_single_kallisto_dataset(dataset,datatype,
                         base_dir='MG02_MGX_MTX',
                         depth_normalize=False):
@@ -295,9 +297,341 @@ def load_coproseq_results(coproseq_fpath='norm_percent.profile',bacteria_aliases
         coproseq_df = coproseq_df/coproseq_df.sum(axis=0) #Recalculate RAs normalizing to sum of non-spike in species
     return coproseq_df
 
-###====================================================================================###
+###============================================================================###
+### Preparing DE input tables: benchmarking datasets (BG01) 
+###============================================================================###
+
+#Helper function for collapsing mgx abunds into bug df - OK 
+def bug_abunds_from_mgx(mgx_df,locus_prefixes=[]):
+    bug_df = pd.DataFrame(index=locus_prefixes,columns=mgx_df.columns)
+    for locus_prefix in locus_prefixes:
+        mixture_bug = mgx_df.loc[mgx_df.index.str.contains(locus_prefix)].sum()
+        bug_df.loc[locus_prefix,:] = mixture_bug
+    return bug_df
+
+def select_mixture_data(mixture, all_MGX, all_MTX, all_metadata,
+                        locus_prefixes=[],
+                        metadata_as_cols=False):
+    #Return mixture_MGX, mixture_MTX, mixture_bug, and mixture_metadata.
+    #locus_prefixes must be provided in order to generate bug_abunds. 
+    # locus_prefixes should contain substrings of gene identifiers encoding
+    # their genome of origin (ex. BUG0001 for genes BUG0001_0001, BUG0001_0002)
+    #mixture_metadata just contains Phenotype as a row which is binary encoding of Aran vs Glc.
+    samples_md = all_metadata.loc[all_metadata['Mixture']==mixture]
+    samples = samples_md.index
+    #Subset counts data; intended format is genes x samples 
+    mixture_mgx = all_MGX.loc[:,samples]
+    mixture_mtx = all_MTX.loc[:,samples]
+    #Collapse mgx into bug abunds 
+    mixture_bug = bug_abunds_from_mgx(mixture_mgx,locus_prefixes=locus_prefixes)
+    #Convert media to phenotype factor
+    phenotypes = (samples_md.loc[:,['Media']]=='PCDM+Aran').astype(int).rename(columns={'Media':'Phenotype'})
+    if metadata_as_cols:
+        mixture_metadata = phenotypes.copy() #Do not transpose if overridden, results in samples x Phenotype 
+    else: 
+        mixture_metadata = phenotypes.T #Transpose by default - results in metadata features x samples 
+    return mixture_mgx, mixture_bug, mixture_mtx, mixture_metadata
+
+def select_phenotype_data(phenotype,mgx,bug,mtx,metadata,phenotype_label='Phenotype'):
+    #Subset all four inputs to samples by phenotype in metadata
+    if phenotype_label in metadata.columns:
+        mgx = mgx.loc[:,metadata[phenotype_label]==phenotype] 
+        bug = bug.loc[:,metadata[phenotype_label]==phenotype] 
+        mtx = mtx.loc[:,metadata[phenotype_label]==phenotype] 
+        metadata = metadata.loc[metadata[phenotype_label]==phenotype,:]
+    elif phenotype_label in metadata.index:
+        mgx = mgx.loc[:,metadata.loc[phenotype_label,:]==phenotype] 
+        bug = bug.loc[:,metadata.loc[phenotype_label,:]==phenotype] 
+        mtx = mtx.loc[:,metadata.loc[phenotype_label,:]==phenotype] 
+        metadata = metadata.loc[:,metadata.loc[phenotype_label,:]==phenotype]
+    else:
+        raise ValueError('Metadata is missing provided phenotype_label')
+    return mgx,bug,mtx,metadata
+
+def zero_sample_data(zero_mgx,zero_bug,zero_mtx,zero_metadata,
+                     zero_sample_size=0,phenotype=0): 
+    """Randomly sample non-colonized data with replacement from provided mgx/bug/mtx/md. 
+    
+    @param zero_mgx,zero_bug,zero_mtx,zero_metadata: pd.DataFrame, required. Counts
+        and metadata from which to sample with replacement. These data are assumed 
+        to be non-colonized, though any counts and metadata can be provided to 
+        sample from. 
+    @param zero_sample_size: int, default 0. Sample size for non-colonized data. 
+    @param phenotype: int, default 0. Fill value to assign phenotype with in 
+        resulting zero_samples_md.
+    @return zero_samples_mgx,zero_samples_bug,zero_samples_mtx: pd.DataFrame, 
+        counts data for random sample of non-colonized data 
+    @return zero_samples_md: pd.DataFrame, metadata for random sample. 
+    
+    """
+    zero_samples = np.random.choice(zero_metadata.columns,size=zero_sample_size)
+    zero_samples_mgx = zero_mgx.loc[:,zero_samples]
+    zero_samples_bug = zero_bug.loc[:,zero_samples]
+    zero_samples_mtx = zero_mtx.loc[:,zero_samples]
+    zero_samples_md = zero_metadata.loc[:,zero_samples]
+    #1. give zero samples unique identifiers (_P{phenotype}_Z{zero sample number}) - OK
+    zero_samples_unique = [sample+"_P{0}_Z{1}".format(phenotype,i+1) \
+                        for i,sample in enumerate(zero_samples_md.columns)]
+    #2. Re-index counts and metadata with unique identifiers (by renaming samples) - OK
+        #Dirctionary approach using rename does not handle duplicate labels (i.e. duplicates will get mapped to only one 'unique' label)
+        #Explicitly setting index and column values from array to handle duplicate labels
+    zero_samples_md.columns = zero_samples_unique
+    zero_samples_mgx.columns = zero_samples_unique
+    zero_samples_bug.columns = zero_samples_unique
+    zero_samples_mtx.columns = zero_samples_unique
+    #3. Harcode phenotype values in metadata for which group these zero samples are being added to -TODO
+    zero_samples_md.loc['Phenotype',:] = phenotype
+    return zero_samples_mgx,zero_samples_bug,zero_samples_mtx,zero_samples_md
+
+def zero_inflate_mixture_data(all_MGX,all_MTX,all_metadata,
+                              mixture,
+                              zero_mixture_ID='Pco0%',
+                              zero_sample_size=0,
+                              locus_prefixes=[],
+                              metadata_as_cols=False):
+    """For a specified mixture, select relevant counts and metadata and spike-in
+    non-colonized samples to emulate incomplete prevalence. 
+
+    TODO: Add options for more control over zero sampling (filtering phenotype, etc)
+    @param all_MGX, all_MTX, all_metadata: pd.DataFrame, required. Counts and metadata 
+        with features as rows and samples as columns. 
+    @param mixture: Mixture identifier in all_metadata, required; returned 
+        datasets will contain colonized samples at this RA level zero inflated
+        with non-colonized samples. 
+    @param zero_mixture_ID: Mixture identifier in all_metadata, default 'Pco0%'. 
+        The non-colonized samples to spike-in will be sampled with replacement 
+        from this mixture level. 
+    @param zero_sample_size: int, default 0. Number of non-colonized samples to 
+        spike-in.
+    @param metadata_as_cols: bool, default False. If True, metadata will be in
+     format samples x features.  
+    
+    @return mixture_md_ZI: pd.DataFrame containing the zero-inflated metadata. 
+        The non-colonized samples will have unique identifiers containing the 
+        original zero-mixture sample ID with a '_Z{XX}' suffix. 
+        The zero-inflated samples will have forced phenotype values in each 
+        group (i.e. the non-colonized samples are sampled from both Arabinan and 
+        Glucose 0% samples, but will have 'Phenotype' reassigned)
+    @ return mixture_mgx_ZI, mixture_bug_ZI,mixture_mtx_ZI: counts DataFrames
+        for the zero-inflated dataset
+    """
+    #Select mixture data to zero-inflate 
+    mixture_mgx, \
+    mixture_bug, \
+    mixture_mtx, \
+    mixture_metadata = select_mixture_data(mixture,
+                                            all_MGX,all_MTX,
+                                            all_metadata,
+                                            locus_prefixes=locus_prefixes,
+                                            metadata_as_cols=False)
+    #Select zero_mixture_ID data to sample spike-ins from:
+    zero_mgx, \
+    zero_bug, \
+    zero_mtx, \
+    zero_metadata = select_mixture_data(zero_mixture_ID,
+                                        all_MGX,all_MTX,
+                                        all_metadata,
+                                        locus_prefixes=locus_prefixes,
+                                        metadata_as_cols=False)
+    #Empty DataFrames to populate with mixture and ZI samples before returning
+    mixture_md_ZI, \
+    mixture_mgx_ZI, \
+    mixture_bug_ZI, \
+    mixture_mtx_ZI = pd.DataFrame(),pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
+    #For each phenotype, select mixture data and generate/add accompanying zero data 
+    for phenotype in (1,0):
+        #Select mixture/phenotype data 
+        mixture_mgx_pht, \
+        mixture_bug_pht, \
+        mixture_mtx_pht, \
+        mixture_md_pht = select_phenotype_data(phenotype,
+                                                mixture_mgx,
+                                                mixture_bug,
+                                                mixture_mtx,
+                                                mixture_metadata)
+        #Generate random sample (with replacement) from all 12 Pco0 samples for this phenotype group
+        zero_samples_mgx,\
+        zero_samples_bug,\
+        zero_samples_mtx,\
+        zero_samples_md = zero_sample_data(zero_mgx,zero_bug,zero_mtx,zero_metadata,
+                                            zero_sample_size=zero_sample_size,
+                                            phenotype=phenotype)
+        #4. Combine mixture and zero sample data 
+        mixture_md_ZI_pht = pd.concat((mixture_md_pht,zero_samples_md),axis=1)
+        mixture_mgx_ZI_pht = pd.concat((mixture_mgx_pht,zero_samples_mgx),axis=1)
+        mixture_bug_ZI_pht = pd.concat((mixture_bug_pht,zero_samples_bug),axis=1)
+        mixture_mtx_ZI_pht = pd.concat((mixture_mtx_pht,zero_samples_mtx),axis=1)
+        #5. Add into combined ZI dataset for both phenotpyes 
+        mixture_md_ZI = pd.concat((mixture_md_ZI,mixture_md_ZI_pht),axis=1)
+        mixture_mgx_ZI = pd.concat((mixture_mgx_ZI,mixture_mgx_ZI_pht),axis=1)
+        mixture_bug_ZI = pd.concat((mixture_bug_ZI,mixture_bug_ZI_pht),axis=1)
+        mixture_mtx_ZI = pd.concat((mixture_mtx_ZI,mixture_mtx_ZI_pht),axis=1)
+    return mixture_mgx_ZI,mixture_bug_ZI,mixture_mtx_ZI,mixture_md_ZI
+
+def convert_metadata_deseq_to_mpra(metadata_df):
+    """Convert a metadata table from DESeq2-compatible format to MPRAnalyze-compatible format.
+    """
+    #Transpose to samples as rows
+    metadata_df = metadata_df.T
+    #Add SampleID covariate (to be used as lib.factor so that each sample is normalized separately)
+    metadata_df['SampleID'] = metadata_df.index
+    #Remove index name
+    metadata_df.index.name = ''
+    #Add Barcode covariate (currently unused)
+    metadata_df['Barcode'] = 1
+    return metadata_df
+
+def write_tables(method_input_dir,dataset_handle,
+                 mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata,overwrite_files=False):
+    """Write counts and metadata to defined directory structure for a given DE input dataset. 
+    """
+    mixture_mgx_fpath = os.path.join(method_input_dir,"{0}.mgx_abunds.tsv".format(dataset_handle))
+    mixture_bug_fpath = os.path.join(method_input_dir,"{0}.bug_abunds.tsv".format(dataset_handle))
+    mixture_mtx_fpath = os.path.join(method_input_dir,"{0}.mtx_abunds.tsv".format(dataset_handle))
+    mixture_md_fpath = os.path.join(method_input_dir,"{0}.metadata.tsv".format(dataset_handle))
+
+    for fpath, table in zip([mixture_mgx_fpath,mixture_bug_fpath,mixture_mtx_fpath,mixture_md_fpath],
+                               [mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata]):
+        if not os.path.exists(fpath) or overwrite_files:
+            table.to_csv(fpath,sep='\t')
+
+def write_tables_MPRA_metadata(method_input_dir,dataset_handle,
+                 mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata,
+                   overwrite_files=False):
+    """Write counts and metadata to defined directory structure for a given DE input dataset,
+        including MPRAnalyze formatted metadata (features as columns with a lib.factor compatible column) 
+    """
+    mixture_mgx_fpath = os.path.join(method_input_dir,"{0}.mgx_abunds.tsv".format(dataset_handle))
+    mixture_bug_fpath = os.path.join(method_input_dir,"{0}.bug_abunds.tsv".format(dataset_handle))
+    mixture_mtx_fpath = os.path.join(method_input_dir,"{0}.mtx_abunds.tsv".format(dataset_handle))
+    mixture_md_fpath = os.path.join(method_input_dir,"{0}.metadata.tsv".format(dataset_handle))
+    mixture_mpra_md_fpath = os.path.join(method_input_dir,"{0}.MPRA_metadata.tsv".format(dataset_handle))
+    #Generate mpra-formatted metadata 
+    mixture_mpra_md = convert_metadata_deseq_to_mpra(mixture_metadata)
+    for fpath, table in zip([mixture_mgx_fpath,mixture_bug_fpath,mixture_mtx_fpath,mixture_md_fpath,mixture_mpra_md_fpath],
+                               [mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata,mixture_mpra_md]):
+        if not os.path.exists(fpath) or overwrite_files:
+            table.to_csv(fpath,sep='\t')
+
+###============================================================================###
+### Preparing DE input tables: in vitro crossfeeding datasets (BG04) 
+###============================================================================###
+
+#Helper function for getting counts for specific sample lists 
+def get_samples_mgx_mtx(samples_list,mgx_df,mtx_df):
+    #Check that samples are in counts tables; assumes samples on cols of counts tables 
+    for sample in samples_list:
+        if sample not in mgx_df.columns or sample not in mtx_df.columns:
+            raise ValueError("Provided sample label {0} not in counts dataframes.".format(sample))
+    return mgx_df.loc[:,samples_list],mtx_df.loc[:,samples_list]
+#Helper function for getting sample identifiers matching metadata 
+def get_mixture_media_time_samples(all_metadata,mixture,media,time):
+    samples_list = all_metadata.loc[(all_metadata['Mixture']==mixture) & \
+                                    (all_metadata['Media']==media) & \
+                                    (all_metadata['Time']==time),:].index
+    return samples_list
+#Get mgx, mtx counts by mixture/media/time sample metadata
+def get_mixture_media_time_counts(all_metadata,mgx_df,mtx_df,
+                                 mixture,media,time):
+    return get_samples_mgx_mtx(get_mixture_media_time_samples(all_metadata,mixture,media,time),
+                              mgx_df,mtx_df)
+#Generate a 'Phenotype' x samples DataFrame from two condition strings
+# Treatment and reference are 1, 0 in 'Phenotype' and inferred automatically
+# using the factor_encoding functions below.   
+def generate_comparison_metadata_df(all_metadata,condition_str1,condition_str2):
+    #Split condition strings into corresponding metadata 
+    mix1, media1, time1 = condition_str1.split('-')
+    mix2, media2, time2 = condition_str2.split('-')
+    samples_condition1 = get_mixture_media_time_samples(all_metadata,mix1,media1,time1)
+    samples_condition2 = get_mixture_media_time_samples(all_metadata,mix2,media2,time2)
+    condition_encoding = condition_str_factor_encoding(condition_str1,condition_str2)
+    comparison_metadata = pd.DataFrame()
+    #Populate Phenotype metadata feature using condition_encoding
+    comparison_metadata.loc['Phenotype',samples_condition1] = condition_encoding[condition_str1]
+    comparison_metadata.loc['Phenotype',samples_condition2] = condition_encoding[condition_str2]
+    comparison_metadata = comparison_metadata.astype(int)
+    return comparison_metadata
+
+#Encode timepoints as a {0,1} factor to determine DE treatment/reference
+def time_factor_encoding(time1,time2):
+    #Convert time strs ({XX}h) to int values 
+    time1_value, time2_value = int(time1[:time1.index('h')]),int(time2[:time2.index('h')])
+    #Use > comparison to determine phenotype values 
+    #Encode higher time point as treatment (1)
+    if time1_value > time2_value:
+        time_encoding = {time1:1,time2:0}
+    elif time2_value > time1_value:
+        time_encoding = {time1:0,time2:1}
+    #If timepoints are equal, give both same value of 1; when multiplying other factors in, 
+    # one condition will be set to 0
+    else: 
+        time_encoding = {time2:1}
+    return time_encoding
+#Encode media as a {0,1} factor to determine DE treatment/reference
+def media_factor_encoding(media1,media2):
+    #media1 and media2: {'Arn','Aos','Glc'}
+    # Intended reference levels: Arn > Aos > Glc
+    #Aos vs Glc case (or non-Arn self vs self)
+    if media1 != 'Arn' and media2 != 'Arn':
+        media_encoding = {'Aos':1,'Glc':0}
+    #Arn vs Glc case (or non-Aos self vs self)
+    elif media1 != 'Aos' and media2 != 'Aos':
+        media_encoding = {'Arn':1,'Glc':0}
+    #Arn vs Aos case 
+    elif media1 != 'Glc' and media2 != 'Glc':
+        media_encoding = {'Arn':1,'Aos':0}
+    return media_encoding
+#Encode inoculum as a {0,1} factor to determine DE treatment/reference
+def mixture_factor_encoding(mixture1,mixture2):
+    #Mixtures: {'Pco', 'Mmu', 'Pco+Mmu'}
+    #Cannot be Pco vs. Mmu; must be self vs self or Pco+Mmu vs single organism
+    #Handle self vs self case: return 1 for both groups 
+    if mixture1 == mixture2:
+        mixture_encoding = {mixture1:1}
+    elif mixture1 == 'Pco+Mmu':
+        mixture_encoding = {mixture1:1,mixture2:0}
+    elif mixture2 == 'Pco+Mmu':
+        mixture_encoding = {mixture1:0,mixture2:1}
+    else:
+        raise ValueError("Cannot set factor levels for mixture1: \
+                        {0} and mixture 2: {1}".format(mixture1,mixture2))
+    return mixture_encoding
+#Convert strings specifying sample metadata to {0,1} factor for DE testing 
+def condition_str_factor_encoding(condition_str1,condition_str2):
+    # Encode two mix-media-time strings to final {0,1} factors for use with DE testing
+    # If both conditions strings are the same, raise ValueError 
+    if condition_str1 == condition_str2:
+        raise ValueError("Both provided condition strings are the same.")
+    
+    mix1, media1, time1 = condition_str1.split('-')
+    mix2, media2, time2 = condition_str2.split('-')
+    mixture_encoding = mixture_factor_encoding(mix1,mix2)
+    media_encoding = media_factor_encoding(media1,media2)
+    time_encoding = time_factor_encoding(time1,time2)
+    #Multiply {0,1} factors to give end comparison reference levels:
+    condition1_factor = mixture_encoding[mix1]*media_encoding[media1]*time_encoding[time1]
+    condition2_factor = mixture_encoding[mix2]*media_encoding[media2]*time_encoding[time2]
+    if condition1_factor == condition2_factor:
+        warning_message = ("Both conditions contain one mixture/media/time metadata which is encoded as lower. "
+                            "Prioritizing media > mixture > time differences for final factors.")
+        warnings.warn(warning_message)
+        #Test code - prioritizing certain metadata over others (media>mixture>time)
+        # If media factors differ, final encoding uses media encodings
+        if media_encoding[media1] != media_encoding[media2]:
+            return {condition_str1:media_encoding[media1],
+                   condition_str2:media_encoding[media2]}
+        elif mixture_encoding[mix1] != mixture_encoding[mix2]:
+            return {condition_str1:mixture_encoding[mix1],
+                   condition_str2:mixture_encoding[mix2]}
+        else: 
+            return {condition_str1:time_encoding[time1],
+                   condition_str2:time_encoding[time2]}
+    else:
+        return {condition_str1:condition1_factor,condition_str2:condition2_factor}
+
+###============================================================================###
 ### Data Summarization  
-###====================================================================================###
+###============================================================================###
 def mgx_to_relative_abundance(mgx_df,bacteria_info,spike_ins=[],
                                 locus_tag_prefix_re_pat=r'([\w]+)_\d+',
                                 index_on_organism=False):
@@ -371,9 +705,9 @@ def taxon_DE_fractions(results_df,bug_df,alpha=0.05,sig_label='qval',subset_to_t
         bug_DE_fractions_df.loc[bug,'sig_up_fraction'] = sig_up_fraction
     return bug_DE_fractions_df
 
-###====================================================================================###
+###============================================================================###
 ### Data Visualization - generic visualization functions  
-###====================================================================================###
+###============================================================================###
 
 def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
                 hue_label='significant',alpha=0.05,
@@ -426,7 +760,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
 def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='strain',
                         pval_label='qval',hue_label='significant',
                         alpha=0.05,ax=None,figsize=(2,4),title='',violin_norm='count',
-                        ylim=(-10,10),markersize=5,
+                        ylim=(-10,10),markersize=5,linewidth=0,edgecolor='k',
                         palette={True:sns.color_palette('colorblind')[0],False:MTX_colors.NS_gray},
                         legend=True):
     if not ax: 
@@ -439,7 +773,8 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
         all_results_df['significant'] = all_results_df[pval_label] <=alpha
         strip_results_df['significant'] = strip_results_df[pval_label] <=alpha
     #Violin plot: all FC values in all_results_df 
-    ax = sns.violinplot(all_results_df,x=xlabel,y=logFC_label,ax=ax,color='#DDDDDD',zorder=1,density_norm=violin_norm,inner=None,
+    ax = sns.violinplot(all_results_df,x=xlabel,y=logFC_label,ax=ax,color='#DDDDDD',zorder=1,
+                        density_norm=violin_norm,inner=None,linecolor='#000000',
                   linewidth=1,cut=0)
     if len(all_results_df[hue_label].unique())<=2 and hue_label=='significant': #Single position strip plot 
         ax = sns.swarmplot(strip_results_df,x=xlabel,y=logFC_label,hue=hue_label,
@@ -450,14 +785,25 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
         #2. Generate strip plots 
         swarm_results_sig = strip_results_df[strip_results_df[pval_label]<=alpha].sort_values(hue_label)
         swarm_results_ns = strip_results_df[strip_results_df[pval_label]>=alpha].sort_values(hue_label)
-        hue_levels = swarm_results_ns[hue_label].unique()
-        #ns_palette encodes different hue labels to support usage of dodge in sns.stripplot (i.e. different
-        #x positions for each hue label) but applies the same NS_gray hue value for each label
-        ns_palette = dict(zip(hue_levels,[MTX_colors.NS_gray]*len(hue_levels)))
-        ax = sns.stripplot(swarm_results_ns,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
-                        palette=ns_palette,dodge=True,size=markersize,zorder=2)
-        ax = sns.stripplot(swarm_results_sig,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
-                        palette=palette,dodge=True,size=markersize,zorder=3)
+        hue_levels = strip_results_df[hue_label].unique()
+        #ns_palette encodes different hue labels to support usage of dodge in sns.stripplot
+        # (to align with significant strippplot, i.e. different x positions for 
+        # each hue label) but applies the same NS_gray hue value for all
+
+        #Try to infer NS gray hue to use from palette, or use default
+        if 0 in palette:
+            NS_gray = palette[0]
+        else:
+            NS_gray = MTX_colors.NS_gray
+        ns_palette = dict(zip(hue_levels,[NS_gray]*len(hue_levels)))
+        if len(swarm_results_ns) > 0:
+            ax = sns.stripplot(swarm_results_ns,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
+                        palette=ns_palette,dodge=True,size=markersize,zorder=2,
+                        linewidth=linewidth,edgecolor=edgecolor)
+        if len(swarm_results_sig) > 0:
+            ax = sns.stripplot(swarm_results_sig,x=xlabel,y=logFC_label,ax=ax,hue=hue_label,hue_order=hue_levels,
+                        palette=palette,dodge=True,size=markersize,zorder=3,
+                        linewidth=linewidth,edgecolor=edgecolor)
     #Standardize axes and title
     ax.set_xlabel('')
     ax.set_ylabel('logFC')
@@ -475,8 +821,8 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
 def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=None,
                     bar_palette=MTX_colors.MG02_bar_palette.values(),
                     swarm_palette=MTX_colors.MG02_point_palette.values(),
-                    bar_alpha=1,ax=None,
-                    show_legend=True):
+                    bar_alpha=1,markersize=5,ax=None,
+                    show_legend=True,marker_col=None,marker_dict={}):
     if not ax: 
         fig, ax = plt.subplots(figsize=figsize)
     #barplot
@@ -487,8 +833,21 @@ def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=No
                     alpha=bar_alpha,
                     legend=True)
     #overlaid swarmplot 
-    ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
-              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=3.5)
+    if not marker_col:
+        ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize)
+    else: 
+        #marker_dict maps values in marker_col to matplotlib marker str specifications 
+        # markers: https://matplotlib.org/stable/api/markers_api.html#module-matplotlib.markers
+        #For each marker_col value, make separate swarmplot
+
+        #This has not been tested in cases where x/y/hue do not have all unique values
+        # represented in each marker_data subset, which may cause axis misalignment 
+        for metadata in marker_dict:
+            marker = marker_dict[metadata]
+            marker_data = data[data[marker_col]==metadata]
+            ax = sns.swarmplot(marker_data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize,marker=marker)
     # if ax.get_legend():
     if show_legend:
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
@@ -499,16 +858,105 @@ def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=No
     # ax.set_ylim(0,ymax)
     return ax
 
-###====================================================================================###
+###=========================================================================###
 ### Data Visualization - application-specific visualization functions  
-###====================================================================================###
+###=========================================================================###
+
+def counts_regplot(counts_df,sample1,sample2,
+                    locus_prefix='',xlim=(),ylim=(),
+                    depth_normalize=False,ax=None,
+                    figsize=(4,4),plot_unit=False,
+                    anno_PCC=False,anno_slope=False):
+    '''Generate a regression plot between gene-level counts for two different 
+        samples. 
+    @param counts_df: pd.DataFrame, required. Must contain labels sample1 and 
+        sample2 as columns. 
+    @param sample1, sample2: labels in counts_df for which counts will be used 
+        as x and y for regplot.
+    @param locus_prefix: str, optional. If provided, filter genes by those 
+        containing locus_prefix. Intended for filtering inputs to only genes 
+        from a given organism. 
+    @param xlim, ylim: tuples, optional. If provided, will be used to set x and 
+        y axis limits of regplot. 
+    @param depth_normalize: bool, default False. If True, normalize counts by 
+        sequencing depth of relevant genes (after locus_prefix filtering). Uses
+        the greater of the two samples sequencing depths. 
+    @param ax: Matplotlib Axes object, optional. If provided, draw plot on 
+        existing axes. Otherwise, create new figure.
+    @param fisgize: tuple, default (4,4). When generating new figure (i.e. if
+        ax not provided), use this as figsize. 
+    @param plot_unit: bool, default False. If True, plot 1:1 dashed line.
+    @param anno_PCC: bool, default False. If True, calculate Pearson R2 between
+        the samples and annotate as text. 
+    @param anno_slop: bool, default False. If True, fit OLS linear regression 
+        and annotate the slope as text.  
+
+    @return ax: Matplotlib Axes. Contains regression plot. 
+    @return pcc: float. Pearson R2 calculated between samples
+    @return slope: slope of OLS linear regression between two samples 
+    '''
+    if not ax: 
+        fig,ax = plt.subplots(1,1,figsize=figsize)
+    if sample1 not in counts_df or sample2 not in counts_df:
+        raise ValueError('One of provided sample labels is not a column in counts_df.')
+    #If locus_prefix is provided, filter counts to those genes whose 
+    # names contain locus_prefix. 
+    if locus_prefix:
+        sample1_counts = counts_df.loc[counts_df.index.str.contains(locus_prefix),
+                                        sample1]
+        sample2_counts = counts_df.loc[counts_df.index.str.contains(locus_prefix),
+                                        sample2]
+        if len(sample1_counts) == 0 or len(sample2_counts) == 0:
+            raise ValueError('Provided locus_prefix does not match any gene identifiers.')
+    else:
+        sample1_counts = counts_df.loc[:,sample1]
+        sample2_counts = counts_df.loc[:,sample2]
+    #Normalize sequencing depths of counts, resulting in float counts values for 
+    # sample with lower relevant depth 
+    # Note this does not work well at low 
+    # serquencing coverage if input counts are integers (as expected).  
+    if depth_normalize:
+        sample1_depth = sample1_counts.sum()
+        sample2_depth = sample2_counts.sum()
+        #Lower depth sample counts up to higher depth
+        if sample1_depth > sample2_depth:
+            sample2_counts = sample2_counts * (sample1_depth/sample2_depth)
+        else: 
+            sample1_counts = sample1_counts * (sample2_depth/sample1_depth)
+    #Calculate pcc and slope 
+    pcc, pcc_pval = stats.pearsonr(sample1_counts,sample2_counts)
+    linregress_results = stats.linregress(sample1_counts,sample2_counts)
+    slope = linregress_results[0]
+    #Generate regplot 
+    ax = sns.regplot(x=sample1_counts,y=sample2_counts,ax=ax) 
+    #If axes limits are provided, use them to set x and/or y-axis limits
+    if len(xlim) == 2:
+        ax.set_xlim(xlim)
+    if len(ylim) == 2:
+        ax.set_ylim(ylim)
+    #Store ymax for annotating text
+    xmax, ymax = ax.get_xlim()[1], ax.get_ylim()[1]
+    #plot unit line
+    if plot_unit:
+        ax.plot([0,np.max((xmax,ymax))],
+                [0,np.max((xmax,ymax))],
+                linestyle='dashed',color='k',linewidth=0.5)
+    #Provide text annotations of pcc and slope 
+    if anno_PCC:
+        ax.text(s="PCC={:.3f}".format(pcc),
+                x=xmax*0.02,y=ymax*0.98,ha='left', va='top', color='k',)
+    if anno_slope:
+        ax.text(s="Slope={:.3f}".format(slope),
+                x=xmax*0.02,y=ymax*0.93,ha='left', va='top', color='k',)
+    return ax, pcc, slope 
+
 
 def relative_abundance_barswarmplot(counts_df,sample_md,locus_prefix,x,hue=None,
                                     sampleID_col='SampleID',
                                     bar_palette=MTX_colors.MG02_bar_palette.values(),
                                     swarm_palette=MTX_colors.MG02_point_palette.values(),
                                     dodge=True,figsize=(8,4),order=None,hue_order=None,
-                                    bar_alpha=1,ax=None,
+                                    bar_alpha=1,markersize=5,ax=None,
                                     show_legend=True):
     '''Generate a barswarmplot where bar/swarm values are the relative abundance of an organism, 
     estimated as the fraction of counts from counts_df corresponding to genes containing locus_prefix. 
@@ -530,30 +978,36 @@ def relative_abundance_barswarmplot(counts_df,sample_md,locus_prefix,x,hue=None,
     @param dodge,order,hue_order: Passed to seaborn barplot/swarmplot by bar_swarmplot.  
     @param bar_alpha: [0,1], default 1. Transparency for barplot, useful if using same 
         palette for bar_palette and swarm_palette. 
+    @param markersize: float, default 5. Radius of markers in points. Passed to swarmplot as size.
     @param ax: matplotlib Axes, default None. If provided plot will be added to that Axes. If 
     @param show_legend: optional, default True. Whether to show or remove legend. 
     
     @return: matplotlib Axes with relative abundance data plotted as a barswarmplot. 
     '''
     RA_data = sample_md.copy()
+
+    #Set index to sampleID_col so indexes aligned when adding in relative abundance later
     if RA_data.index.name != sampleID_col:
-        RA_data.set_index(sampleID_col)
+        RA_data = RA_data.set_index(sampleID_col)
     locus_prefix_counts = counts_df.loc[counts_df.index.str.contains(locus_prefix),:].sum()
     
     RA_col_label = 'relative_abundance'
     RA_data[RA_col_label] = locus_prefix_counts/counts_df.sum()
-
     ax = bar_swarmplot(RA_data,x=x,y=RA_col_label,hue=hue,
                                            dodge=dodge,
                                            bar_palette=bar_palette,
                                            swarm_palette=swarm_palette,
-                                          figsize=figsize,bar_alpha=bar_alpha,ax=ax)
-    return ax 
+                                          figsize=figsize,bar_alpha=bar_alpha,
+                                          markersize=markersize,ax=ax)
+    return ax, RA_data 
 
 def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],phenotypes=[],
-                            logFC_label='coef',pval_label='qval',alpha=0.1,violinplot_geneset='all',ax=None,
-                            ylim=(-10,10),markersize=5,figsize=(2,4),legend=False):
-    '''Generate a violin stripplot of differential expression test results showing specific mcSEED annotated
+                            logFC_label='coef',pval_label='qval',xlabel='Strain',
+                            alpha=0.05,violinplot_geneset='all',ax=None,
+                            ylim=(-10,10),markersize=5,figsize=(2,4),
+                            linewidth=0,edgecolor='k',
+                            legend=False,palette=None):
+    '''Generate a violin stripplot of differential expression test results showing mcSEED annotated
     genes from specified strains and pathways. 
 
     @param all_results_df: pd.DataFrame, required. DataFrame of differential expression test results. Must contain a 
@@ -574,27 +1028,40 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
     @param legend: bool, default False. If True, generates a legend where each phenotype is paired with 
     its corresponding color with an additional marker for gray dots corresponding to genes which 
     did not meet significance. 
+    @param palette: dict, optional. Must contain integer keys from 1 to the number of 
+    phenotypes. If not provided, will automatically generate mapping from phenotypes
+    to colors in the seaborn colorblind palette. 
     '''
     #Do not propagate changes to original results DataFrame 
     all_results_df = all_results_df.copy() 
     #Helper variables for supplied lists of strains and phenotypes
     n_strains = len(strains)
     n_phenotypes = len(phenotypes)
-    bacteria_plot_order_dict = dict(zip(strains,range(len(strains)))) #For maintaining order of violin plots 
+    if xlabel == 'Strain':
+        xlabel_plot_order_dict = dict(zip(strains,range(len(strains)))) #For maintaining order of violin plots 
+    else: 
+        #For other xlabels, retain original order of x unique values in all_results_df 
+        x_unique_values = all_results_df[xlabel].unique()
+        xlabel_plot_order_dict = dict(zip(x_unique_values,range(len(x_unique_values)))) #For maintaining order of violin plots 
+
+    NS_gray = MTX_colors.NS_gray 
 
     #QC supplied values
     if n_strains == 0:
         raise ValueError('Please supply a list of at least one strain identifiers in strains; currently empty.')
-
-    #Set up mcSEED palette based on number of phenotypes provided 
-    if n_phenotypes <= 6: #Use ordered paired hues from colorblind_subset
-        mcSEED_palette = dict(zip(range(1,7),MTX_colors.colorblind_subset))
-    elif n_phenotypes <= 12: #Use paired seaborn palette
-        mcSEED_palette = dict(zip(range(1,11),MTX_colors.twelve_paired))
-    else:     
-        warnings.warn('Number of specified phenotypes exceeds palette length, colors will be repeated.')
-        mcSEED_palette = dict(zip(range(1,n_phenotypes+1),sns.color_palette('colorblind',n_phenotypes)))
-    mcSEED_palette[0] = MTX_colors.NS_gray #Add in no-significance color
+    if not palette: 
+        #Set up mcSEED palette based on number of phenotypes provided 
+        if n_phenotypes <= 6: #Use ordered paired hues from colorblind_subset
+            mcSEED_palette = dict(zip(range(1,7),MTX_colors.colorblind_subset))
+        elif n_phenotypes <= 12: #Use paired seaborn palette
+            mcSEED_palette = dict(zip(range(1,11),MTX_colors.twelve_paired))
+        else:     
+            warnings.warn('Number of specified phenotypes exceeds palette length, colors will be repeated.')
+            mcSEED_palette = dict(zip(range(1,n_phenotypes+1),sns.color_palette('colorblind',n_phenotypes)))
+        mcSEED_palette[0] = NS_gray #Add in no-significance color
+    else: 
+        mcSEED_palette = palette
+    
     
     #Add strain and phenotype metadata to results_df 
     all_results_df['Strain'] = all_results_df.index.str.extract(r'(\w+)_\d+',expand=False).map(bacteria_info['organism'])
@@ -604,8 +1071,9 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
     #Extract corresponding genes from all_results_df 
     bacteria_lt_re_pat = '|'.join(bacteria_lt_prefixes)
     bacteria_results_df = all_results_df.loc[all_results_df.index.str.contains(bacteria_lt_re_pat)]
-    #Sort by provided list of strains 
-    bacteria_results_df = bacteria_results_df.sort_values('Strain',key=lambda x:x.map(bacteria_plot_order_dict))
+    #Sort by provided list of strains (or list of unique values in col xlabel)
+    bacteria_results_df = bacteria_results_df.sort_values(xlabel,key=lambda x:x.map(xlabel_plot_order_dict))
+    
     #Filter bacteria_results to bacteria results with mcSEED annotations 
     mcSEED_results_df = bacteria_results_df[bacteria_results_df.index.isin(mcSEED.index)]
     #Encode mcSEED phenotypes from provided list of regexps
@@ -630,14 +1098,23 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
     else:
         warnings.warn('Unrecognized option for violinplot_geneset; using all genes.')
         violinplot_results = bacteria_results_df
+
+    #Handle case where concatenating across models and rownames (genes) have duplicates
+    if len(mcSEED_results_for_stripplot.index.unique()) < len(mcSEED_results_for_stripplot):
+        mcSEED_results_for_stripplot = mcSEED_results_for_stripplot.reset_index(drop=False)
+    if len(violinplot_results.index.unique()) < len(violinplot_results):
+        violinplot_results = violinplot_results.reset_index(drop=False)
+
+    #Violin_stripplot call: 
     ax = violin_stripplot(violinplot_results,mcSEED_results_for_stripplot,
                                  logFC_label=logFC_label,
                                 pval_label=pval_label,
-                                xlabel='Strain',
+                                xlabel=xlabel,
                                  hue_label='Phenotype',
                                 alpha=alpha,ax=ax,violin_norm='area',
                                  legend=False,palette=mcSEED_palette,ylim=ylim,
-                                 markersize=markersize,figsize=figsize)
+                                 markersize=markersize,figsize=figsize,
+                                 linewidth=linewidth,edgecolor=edgecolor)
     #Custom legend generation for significance + phenotypes
     if legend:
         #For each phenotype, generate dummy marker (Line2D with o marker and no line) using corresponding 
@@ -647,7 +1124,7 @@ def mcSEED_violin_stripplot(all_results_df,bacteria_info,mcSEED,strains=[],pheno
                             for j,pht in enumerate(phenotypes)]
         #Add NS legend element (NS.gray o marker)
         legend_elements.append(Line2D([0], [0], marker='o', color='w', label='N.S.',
-                          markerfacecolor=MTX_colors.NS_gray, markersize=6))
+                          markerfacecolor=NS_gray, markersize=6))
         ax.legend(handles=legend_elements, loc='upper right')
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
     return ax 

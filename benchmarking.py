@@ -284,7 +284,21 @@ def load_DESeq_results(model,dataset,
     such as to standardize column names across different method outputs. 
     Example use: rename_cols={"padj":"qval","pvalue":"pval"} will rename the columns 'padj' and 'pvalue' to 'qval' and 'pval' 
     in the returned DataFrame. 
-    @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. If 'any' or 'all' are provided, 
+    @param: dropna_policy: {'retain','any','all'}, optional. Default 'retain'. 
+        If 'any' or 'all' are provided, dropna will be applied to the results_df 
+        with how=dropna_policy.
+        Note that DESeq2 manually will set padj to NA for a subset of cases described here. 
+        https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#more-information-on-results-columns
+        ' If within a row, all samples have zero counts, the baseMean column will 
+        be zero, and the log2 fold change estimates, p value and adjusted p value 
+        will all be set to NA.
+         If a row contains a sample with an extreme count outlier then the p value 
+        and adjusted p value will be set to NA. These outlier counts are detected 
+        by Cook’s distance. Customization of this outlier filtering and description 
+        of functionality for replacement of outlier counts and refitting is described below.
+         If a row is filtered by automatic independent filtering, for having a low mean normalized 
+        count, then only the adjusted p value will be set to NA. Description and customization of 
+        independent filtering is described below.'
     @param replace_zero_pval: bool, default True. If provided, substitute 0s in pval_columns. 
         These result from p-values in DESeq2 which are below the minimum machine value for R. They cause 
         problems for visualizing (e.g. volcano plots) or otherwise log-transforming p-values.
@@ -430,7 +444,7 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
         summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR"]
     summary_df = pd.DataFrame(columns=summary_df_columns)
     #Number of tested and spiked features 
-    n_tested, n_spiked = len(all_results),len(spiked_features)
+    n_tested, n_spiked = len(all_results.dropna(axis=0,how='any')),len(spiked_features)
     #Sensitivity calculation (TPR)
     if not skip_tpr: #Use skip_tpr for 'null' datasets with no spiked features - assigns np.nan to tpr for clarity
         tp_df = all_results[(all_results.index.isin(spiked_features.index)) &
@@ -456,9 +470,10 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     if not skip_tpr: #For null-XX datasets, skip ppv and npv
     #no spiked features and therefore no tp_df or fn_df. 
         #PPV (precision) calculation: 
-        ppv = len(tp_df)/(len(tp_df)+len(fp_df))
+        ppv = len(tp_df)/np.max([(len(tp_df)+len(fp_df)),1])
         #NPV calculation:
-        npv = len(tn_df)/(len(tn_df)+len(fn_df))
+        npv = len(tn_df)/np.max([(len(tn_df)+len(fn_df)),1])
+
     else: #for null datasets, these metrics are undefined. 
         ppv = np.nan 
         npv = np.nan
@@ -712,9 +727,9 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
     fpr = len(fp_df)/n_true_ns
 
     #PPV (precision) calculation: 
-    ppv = len(tp_df)/(len(tp_df)+len(fp_df))
+    ppv = len(tp_df)/np.max([(len(tp_df)+len(fp_df)),1])
     #NPV calculation:
-    npv = len(tn_df)/(len(tn_df)+len(fn_df))
+    npv = len(tn_df)/np.max([(len(tn_df)+len(fn_df)),1])
     
     #Return summary df with metrics
     if include_ppv:
@@ -819,12 +834,12 @@ def tpr_fpr_heatmaps(summary_df,x,y,
     #Make copy so no edits passed through to original summary DataFrame. 
     summary_df = summary_df.copy() 
     #Convert TPR and FPR to floats for data type compatibility with seaborn 
-    summary_df.loc[:,tpr_col] = summary_df.loc[:,tpr_col].astype('float')
-    summary_df.loc[:,fpr_col] = summary_df.loc[:,fpr_col].astype('float')
+    summary_df[tpr_col] = summary_df[tpr_col].astype('float')
+    summary_df[fpr_col] = summary_df[fpr_col].astype('float')
     if precision_decimals:
-        summary_df.loc[:,tpr_col] = np.round(summary_df.loc[:,tpr_col]\
+        summary_df[tpr_col] = np.round(summary_df[tpr_col]\
                                     .astype('float'),decimals=precision_decimals)
-        summary_df.loc[:,fpr_col] = np.round(summary_df.loc[:,fpr_col]\
+        summary_df[fpr_col] = np.round(summary_df[fpr_col]\
                                     .astype('float'),decimals=precision_decimals)
     #Pivot summary_df
     #x and y-axes in heatmap correspond to columns and index in pivot oops :tweak face: 
@@ -852,7 +867,8 @@ def tpr_fpr_heatmaps(summary_df,x,y,
                                         [tpr_vmax,fpr_vmax],
                                         [tpr_cmap,fpr_cmap],
                                         titles):
-        sns.heatmap(pivot_df,annot=annot,vmin=0,vmax=vmax,cmap=cmap,ax=ax)
+        sns.heatmap(pivot_df,annot=annot,vmin=0,vmax=vmax,cmap=cmap,ax=ax,
+                    linewidths=0.5,linecolor='black')
         ax.set_facecolor(na_facecolor)
         ax.set_title(title)
         #Custom axes labels if provided:
@@ -940,7 +956,9 @@ def ppv_npv_heatmaps(summary_df,x,y,
 
 
 def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
-                                model="",dataset_name="",ax=None,model_color=sns.color_palette("tab10")[0],
+                                model_name="",title="",ax=None,
+                                plot_chance_level=True,
+                                model_color=sns.color_palette("tab10")[0],
                                 line_alpha=1):
     """Use sklearn built-in ROC curve plotting for a given DataFrame of DE test results. 
 
@@ -951,58 +969,100 @@ def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
     if not ax: 
         fig,ax = plt.subplots(figsize=(6,6))
     roc_df = pd.DataFrame(index=all_results.index,columns=["y_true","y_score"])
+    #RocCurveDisplay expects the following information: 
+    #y_true: True binary labels, provided in the format of {0,1} or {-1,1} 
+    #   if pos_label not given
+    #y_score: Target scores, can either be probability estimates of the positive
+    #   class. Here, we define probability of positive class as 1-(score_col) for 
+    #   compatibility with DE testing 
     roc_df['y_true'] = all_results.index.isin(spiked_features.index).astype(int)
     roc_df['y_score'] = 1 - all_results[score_col]
     tpr, fpr, thresholds = roc_curve(y_true=roc_df['y_true'],y_score=roc_df['y_score'],pos_label=1)
     RocCurveDisplay.from_predictions(y_true=roc_df['y_true'],y_pred=roc_df['y_score'],
-                                    name=model,plot_chance_level=True,ax=ax,color=model_color,
+                                    name=model_name,plot_chance_level=plot_chance_level,
+                                    ax=ax,color=model_color,
                                     alpha=line_alpha)
-    plt.title(dataset_name)
+    plt.title(title)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.axis("square")
     return roc_df,tpr,fpr,thresholds
 
 def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,score_col='qval',
-                                    dataset_name="",plot_chance_level=True,palette=[],ax=None):
+                                    title="",plot_chance_level=True,palette=[],ax=None,
+                                    line_alpha=1):
     """Use sklearn built-in ROC curve plotting for multiple DataFrames of DE test results. 
 
     Note: Given how Zhang et al. calculate TPR and FPR respectively from FDR adjusted and nominal/unadjusted 
-    p-values, separate evaluation of TPR and FPR requires a separate function (see manual_ROC_plot_single_model). 
+    p-values, separate evaluation of TPR and FPR requires a separate function (see manual_ROC_plot_single_model).
+
+    @param models_results_dict: dict, required. Maps model identifiers to corresponding DE results 
+        DataFrames. Each results df must be indexed on gene identifiers and contain labels specified 
+        by score_col (default 'qval')
+    @param spiked_features: pd.DataFrame, required. Indexed on gene_identifiers, set of TP 
+        features that should be recovered by model results. 
+    @param dataset_name: str, optional. Used as title for ROC curve plot. 
+    @paaram plot_chance_level: bool, default True. Passed to sklearn.RocCurveDisplay and plots
+        the diagonal 1:1 TPR-FPR ratio line if True.
+    @param palette: dict or list, optional. Colors ROCs for each model individually by model 
+        identifier (dict) or in order of appearance in models_results_dict (list). If not 
+        provided, defaults to seaborn colorblind palette.  
+    @param ax: Matplotlib axes, optional. If not provided, create new figure, otherwise
+        plot on existing axes. 
     """
+    #New matplotlib figure if no axes provided.
+    n_models = len(models_results_dict)
     if not ax:
         fig,ax = plt.subplots(figsize=(6,6))
+    #If no palette provided, default to seaborn colorblind.  
     if len(palette) == 0:
-        palette = list(sns.color_palette("colorblind",n_colors=len(models_results_dict)))
+        if n_models <= 10: 
+            palette = list(sns.color_palette("colorblind",n_colors=n_models))
+        else:
+            if n_models > 20:
+                warnings.warn("This function only supports distinct colors format \
+                                <= 20 model results when palette is not provided. \
+                                Colors will be reused. ")
+            palette = list(sns.color_palette("colorblind",n_colors=10))+\
+                        list(sns.color_palette("deep",n_colors=n_models-10))
+
+    #For each model/results pair, use sklearn_ROC_plot_single_model. 
     for i,model in enumerate(models_results_dict): 
-        #Use either default palette or custom palette for color selection for this model
-        if type(palette) == dict: 
+        #Use either palette (defined by defailt or as arg) for color selection for this model
+        if isinstance(palette,dict):
             try: 
                 model_color = palette[model]
             except KeyError:
                 raise ValueError("dictionary palette is missing entry for {0}".format(model))
-        elif type(palette) == list: #Custom palette 
+        elif isinstance(palette,list): #Custom palette 
             model_color = palette[i]
-
-        all_results = models_results_dict[model]
-        roc_df = pd.DataFrame(index=all_results.index,columns=["y_true","y_score"])
-        roc_df['y_true'] = all_results.index.isin(spiked_features.index).astype(int)
-        roc_df['y_score'] = 1 - all_results[score_col]
-        tpr, fpr, thresholds = roc_curve(y_true=roc_df['y_true'],y_score=roc_df['y_score'],pos_label=1)
-        if plot_chance_level and i==len(models_results_dict)-1: #Only plot chance level once 
-            RocCurveDisplay.from_predictions(y_true=roc_df['y_true'],y_pred=roc_df['y_score'],
-                                        name=model,plot_chance_level=True,ax=ax,color=model_color)
-        else: 
-            RocCurveDisplay.from_predictions(y_true=roc_df['y_true'],y_pred=roc_df['y_score'],
-                                        name=model,plot_chance_level=False,ax=ax,color=model_color)
-    plt.title(dataset_name)
+        
+        #Get corresponding model_results
+        model_results = models_results_dict[model]
+        #Use sklearn_ROC_plot_single_model to plot results for each model using 
+        #   specified model_color.
+        if plot_chance_level and i==n_models-1:
+            #plot_chance_level=True for last plot 
+            sklearn_ROC_plot_single_model(model_results,spiked_features,
+                                            score_col=score_col,
+                                            model_name=model,
+                                            model_color=model_color,line_alpha=line_alpha,    
+                                            ax=ax,plot_chance_level=True)
+        else:
+            #For all others, plot_chance_level=False 
+            sklearn_ROC_plot_single_model(model_results,spiked_features,
+                                            score_col=score_col,
+                                            model_name=model,
+                                            model_color=model_color,line_alpha=line_alpha,    
+                                            ax=ax,plot_chance_level=False)
+    plt.title(title)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.axis("square")
     leg = plt.legend(loc='lower left',bbox_to_anchor=(1,0))
-    return roc_df
+    return ax 
 
-def manual_ROC_plot_single_model(all_results,spiked_features,model="",dataset_name="",
+def manual_ROC_plot_single_model(all_results,spiked_features,model="",title="",
                                 tpr_col='qval',fpr_col='',alpha_step_size=0.005,
                                 log_sample=0,log_sample_num=20,n_features=0,
                                 model_color=sns.color_palette("tab10")[0],line_alpha=1,
@@ -1029,14 +1089,14 @@ def manual_ROC_plot_single_model(all_results,spiked_features,model="",dataset_na
         plt.plot("FPR","TPR",data=roc_df.loc[roc_df["alpha"]==0.05],marker="o",color=model_color,label="")
     if plot_chance_level:
         plt.plot([0,1],[0,1],linestyle='--',color='k',label="Chance level (AUC = 0.5)")
-    plt.title(dataset_name)
+    plt.title(title)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.axis("square")
     leg = plt.legend(loc='lower right')#(loc='lower left',bbox_to_anchor=(1,0))
     return roc_df
 
-def manual_ROC_plot_multiple_models(models_results_dict,spiked_features,dataset_name="",
+def manual_ROC_plot_multiple_models(models_results_dict,spiked_features,title="",
                                     tpr_col='qval',fpr_col='',alpha_step_size=0.005,
                                 log_sample=0,log_sample_num=20,n_features=0,subset_to_tested=True,
                                 palette=[],line_alpha=1,plot_chance_level=True,ax=None,
@@ -1068,7 +1128,7 @@ def manual_ROC_plot_multiple_models(models_results_dict,spiked_features,dataset_
             plt.plot("FPR","TPR",data=roc_df.loc[roc_df["alpha"]==0.05],marker="o",color=model_color,label="")
     if plot_chance_level:
         plt.plot([0,1],[0,1],linestyle='--',color='k',label="Chance level (AUC = 0.5)")
-    plt.title(dataset_name)
+    plt.title(title)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.axis("square")
