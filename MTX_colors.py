@@ -10,6 +10,7 @@ import seaborn as sns
 
 NS_gray = '#BBBBBB'
 violinstrip_NS_gray = '#AAAAAA'
+medium_gray = '#888888'
 S_gray = '#555555'
 
 #seaborn colorblind palette subset 

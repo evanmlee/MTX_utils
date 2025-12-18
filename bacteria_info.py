@@ -352,7 +352,7 @@ def merge_annotations(all_results,annotation_dfs=[],annotation_df_cols=[],
 ### Functions utilizing bacterial genome .ffn (rRNA annotations, coding sequences)
 ###====================================================================================###
 
-def load_bacteria_genome_from_ffn(genome_fname,genomes_dir='reference_genomes'):
+def load_bacteria_genome_from_ffn(genome_fname,genomes_dir='reference_genomes',include_seq=True):
 	"""Uses BioPython SeqIO to parse a genome fasta into a DataFrame indexed on locus tags
 	and containing name, description, and sequence information. 
 	@param genome_fname: 
@@ -380,12 +380,19 @@ def load_bacteria_genome_from_ffn(genome_fname,genomes_dir='reference_genomes'):
 		#genome_fpath = os.path.join(genomes_dir,genome_fname)
 	#SeqIO parsing of fasta file stored at genome_fpath
 	genome_ffn_dict = SeqIO.to_dict(SeqIO.parse(genome_fpath,'fasta'))
-	locus_df_columns = ['name','description','sequence']
+	if include_seq:
+		locus_df_columns = ['name','description','sequence']
+	else: 
+		locus_df_columns = ['name','description']
 	genome_locus_df = pd.DataFrame(columns=locus_df_columns)
 	for locus_tag in genome_ffn_dict:
 		lt_record = genome_ffn_dict[locus_tag]
-		genome_locus_df.loc[locus_tag] = dict(zip(locus_df_columns,
-			[lt_record.name,lt_record.description.replace(locus_tag,'').strip(),str(lt_record.seq)]))
+		if include_seq:
+			genome_locus_df.loc[locus_tag] = dict(zip(locus_df_columns,
+											[lt_record.name,lt_record.description.replace(locus_tag,'').strip(),str(lt_record.seq)]))
+		else: 
+			genome_locus_df.loc[locus_tag] = dict(zip(locus_df_columns,
+											[lt_record.name,lt_record.description.replace(locus_tag,'').strip()]))
 	return genome_locus_df
 
 def filter_rRNA_loci(counts_df,genome_fname,genomes_dir='reference_genomes'):

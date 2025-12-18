@@ -497,11 +497,12 @@ def write_tables(method_input_dir,dataset_handle,
 
 def write_tables_MPRA_metadata(method_input_dir,dataset_handle,
                  mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata,
-                   overwrite_files=False):
+                   overwrite_files=False,mgx_fname='mgx_abunds.tsv',
+                   generate_bug_mtx=False):
     """Write counts and metadata to defined directory structure for a given DE input dataset,
         including MPRAnalyze formatted metadata (features as columns with a lib.factor compatible column) 
     """
-    mixture_mgx_fpath = os.path.join(method_input_dir,"{0}.mgx_abunds.tsv".format(dataset_handle))
+    mixture_mgx_fpath = os.path.join(method_input_dir,"{0}.{1}".format(dataset_handle,mgx_fname))
     mixture_bug_fpath = os.path.join(method_input_dir,"{0}.bug_abunds.tsv".format(dataset_handle))
     mixture_mtx_fpath = os.path.join(method_input_dir,"{0}.mtx_abunds.tsv".format(dataset_handle))
     mixture_md_fpath = os.path.join(method_input_dir,"{0}.metadata.tsv".format(dataset_handle))
@@ -512,6 +513,17 @@ def write_tables_MPRA_metadata(method_input_dir,dataset_handle,
                                [mixture_mgx,mixture_bug,mixture_mtx,mixture_metadata,mixture_mpra_md]):
         if not os.path.exists(fpath) or overwrite_files:
             table.to_csv(fpath,sep='\t')
+    #Also write bug_mtx_abunds (one feature per bug, with values as sum of bug's mtx genes)
+    if generate_bug_mtx:
+        mixture_bug_mtx = mixture_mtx.copy()
+        #Use generic organism_locus re pattern to extract organism identifiers
+        mixture_bug_mtx['locus_base'] = mixture_bug_mtx.index.str.extract(r'(\w+)_\d+',expand=False)
+        #Aggregate by organism
+        mixture_bug_mtx = mixture_bug_mtx.groupby('locus_base').agg('sum')
+        #File path check and write:
+        mixture_bug_mtx_fpath = os.path.join(method_input_dir,"{0}.bug_abunds_mtx.tsv".format(dataset_handle))
+        if not os.path.exists(mixture_bug_mtx_fpath) or overwrite_files:
+            mixture_bug_mtx.to_csv(mixture_bug_mtx_fpath,sep='\t')
 
 ###============================================================================###
 ### Preparing DE input tables: in vitro crossfeeding datasets (BG04) 
@@ -714,6 +726,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
                 replace_zero_pval=True,zero_pval_value=2.225074e-308,
                 ax=None,figsize=(4,4),title='',
                 xlim=(-10,10),ylim=(-0.5,7),markersize=5,linewidth=0,
+                downsample=False,downsample_class=0,downsample_fraction=0.1,
                 palette={True:sns.color_palette('colorblind')[0],False:MTX_colors.NS_gray},
                 legend=True):
     '''Generate a volcano plot of differential testing results, plotting logFC vs -log(p_value) for
@@ -741,6 +754,18 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
         results_df[pval_label] = results_df[pval_label].replace(0,zero_pval_value)
 
     results_df['log_pval'] = -np.log10(results_df[pval_label])
+
+    #Handle downsampling if specified - for points with 
+    # where hue_label==downsample_class, use df.sample 
+    # to downsample points to reduce redundant elements in plot 
+    if downsample:
+        data_to_downsample = results_df[(results_df[hue_label]==downsample_class) & 
+                                        (np.abs(results_df[logFC_label])<0.2)] #downsample points with low logFC and matching downsample_class
+        data_as_is = results_df[~results_df.index.isin(data_to_downsample.index)]
+        np.random.seed(42)
+        downsampled = data_to_downsample.sample(frac=downsample_fraction)
+        results_df = pd.concat((data_as_is,downsampled))
+
     #Volcano plot scatter
     ax = sns.scatterplot(results_df.sort_values(hue_label),x=logFC_label,y='log_pval',hue=hue_label,
         palette=palette,ax=ax,s=markersize,linewidth=linewidth)
@@ -755,7 +780,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
     else:
         ax.get_legend().remove()
-    return ax 
+    return ax, results_df
 
 def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='strain',
                         pval_label='qval',hue_label='significant',
@@ -819,14 +844,37 @@ def violin_stripplot(all_results_df,strip_results_df,logFC_label='coef',xlabel='
 
 
 def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=None,
-                    bar_palette=MTX_colors.MG02_bar_palette.values(),
-                    swarm_palette=MTX_colors.MG02_point_palette.values(),
-                    bar_alpha=1,markersize=5,ax=None,
+                  palette={},bar_palette={},swarm_palette={},
+                  use_violin=False,
+                    bar_alpha=1,swarm_alpha=1,markersize=5,ax=None,
                     show_legend=True,marker_col=None,marker_dict={}):
     if not ax: 
         fig, ax = plt.subplots(figsize=figsize)
+    #Palette handling - allow either separate bar and swarm palettes or one shared palette. 
+    # If no palettes passed, use default three colors from MG02 palettes.
+    if len(palette) == 0 and (len(bar_palette)==0 and len(swarm_palette)==0):
+        bar_palette = MTX_colors.MG02_bar_palette.values()
+        swarm_palette = MTX_colors.MG02_point_palette.values()
+    #If both bar and swarm palettes provided, use as is.
+    elif len(bar_palette) > 0 and len(swarm_palette) > 0:
+        pass #Use specified bar and swarm palettes as is
+    #If only palette provided, use for both bar and swarm; 
+    # then set bar_alpha=0.6 for visual distinction 
+    elif len(palette) > 0:
+        bar_palette = palette
+        swarm_palette = palette
+        bar_alpha = 0.6
+    else:
+        raise ValueError("Unknown palette options, please provide either palette or both bar_palette and swarm_palette.")
+
     #barplot
-    ax = sns.barplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+    if use_violin:
+        ax = sns.violinplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
+                         palette=bar_palette,
+                         zorder=0,dodge=False,ax=ax,cut=0,density_norm='count',
+                         inner=None,alpha=bar_alpha,legend=True,)
+    else:
+        ax = sns.barplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
                     palette=bar_palette,zorder=0,dodge=dodge,ax=ax,
                     capsize=0.1,errorbar='sd',
                     err_kws={'linewidth':0.5,'color':'#000000'},
@@ -835,7 +883,8 @@ def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=No
     #overlaid swarmplot 
     if not marker_col:
         ax = sns.swarmplot(data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
-              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize)
+              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize,
+              alpha=swarm_alpha)
     else: 
         #marker_dict maps values in marker_col to matplotlib marker str specifications 
         # markers: https://matplotlib.org/stable/api/markers_api.html#module-matplotlib.markers
@@ -847,7 +896,8 @@ def bar_swarmplot(data,x,y,hue,dodge=False,figsize=(8,4),order=None,hue_order=No
             marker = marker_dict[metadata]
             marker_data = data[data[marker_col]==metadata]
             ax = sns.swarmplot(marker_data,x=x,y=y,hue=hue,order=order,hue_order=hue_order,
-              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize,marker=marker)
+              palette=swarm_palette,zorder=1,dodge=dodge,ax=ax,size=markersize,marker=marker,
+              alpha=swarm_alpha)
     # if ax.get_legend():
     if show_legend:
         sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
@@ -949,6 +999,169 @@ def counts_regplot(counts_df,sample1,sample2,
         ax.text(s="Slope={:.3f}".format(slope),
                 x=xmax*0.02,y=ymax*0.93,ha='left', va='top', color='k',)
     return ax, pcc, slope 
+
+def feature_counts_regplot(feature,counts1,counts2,
+                           feature2='',
+                           hue=[],palette={},
+                           depth_normalize=False,log_transform=False,
+                           log_pseudocount=0,ax=None,figsize=(4,4),
+                           xlim=(),ylim=(),xlabel='',ylabel='',
+                           plot_unit_line=False,plot_unit_interval=0,
+                           anno_PCC=False,anno_slope=False):
+    """Compare abundance of a single feature between two different
+    quantification formats, counts1 and counts2, across all samples. 
+
+    counts1 and counts2 are assumed to have features as rows and sample as 
+    columns. 
+    """
+
+    #If no axes provided, make new figure using figsize
+    if not ax: 
+        fig,ax = plt.subplots(1,1,figsize=figsize)
+    #If depth_normalize but no xlim and ylim provided, use defaults
+    # assuming relative abundance of genome features 
+    if depth_normalize and (len(xlim) == 0 or len(ylim)==0):
+        xlim = (-6.5,0)
+        ylim = (-6.5,0)
+    #Depth normalize, if specified
+    if depth_normalize:
+        counts1_depths = counts1.sum(axis=0)
+        counts2_depths = counts2.sum(axis=0)
+        #divide all features by sample-level depths
+        counts1 = counts1/counts1_depths
+        counts2 = counts2/counts2_depths
+    #Log transform, if specified
+    if log_transform:
+        counts1 = np.log10(counts1+log_pseudocount)
+        counts2 = np.log10(counts2+log_pseudocount)
+    #Get feature data post-normalization/transformation
+    feature_counts1 = counts1.loc[feature,:]
+    if feature2: #If provided, select feature2 
+        feature_counts2 = counts2.loc[feature2,:]
+    else:
+        feature_counts2 = counts2.loc[feature,:]
+    #Calculate pcc and slope 
+    pcc, pcc_pval = stats.pearsonr(feature_counts1,feature_counts2)
+    linregress_results = stats.linregress(feature_counts1,feature_counts2)
+    slope = linregress_results[0]
+    #Generate regplot of feature in counts1 and counts2
+    if len(hue)==0:
+        ax = sns.regplot(x=feature_counts1,y=feature_counts2,ax=ax) 
+    else: 
+        if len(palette) == 0:
+            raise ValueError("Palette must be provided if providing hue values")
+        if  isinstance(hue,pd.Series) and \
+            (sum(hue.index==feature_counts1.index) < len(feature_counts1) or \
+            sum(hue.index==feature_counts2.index) < len(feature_counts2)): 
+            warnings.warn("Provided hue values do not share an index with sample counts.")
+        #First plot scatter with hue variable 
+        ax = sns.scatterplot(x=feature_counts1,y=feature_counts2,
+                             hue=hue,palette=palette,ax=ax,zorder=1,
+                            linewidth=0
+                             )
+        #Plot regression line without scatter
+        ax = sns.regplot(x=feature_counts1,y=feature_counts2,ax=ax,scatter=False,
+                         line_kws={'zorder':2},color='#000000') 
+        sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
+    
+    #If axes limits are provided, use them to set x and/or y-axis limits
+    if len(xlim) == 2:
+        ax.set_xlim(xlim)
+    if len(ylim) == 2:
+        ax.set_ylim(ylim)
+    #If labels are provided, use them
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    
+    #Get current axes limits for unit line and text annos
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    #If ax limits are same, use y-axis ticks to set x-axis ticks
+    if xmin==ymin and xmax ==ymax:
+        ax.set_xticks(np.arange(np.rint(xmin),np.rint(xmax)+1,1))
+        ax.set_yticks(np.arange(np.rint(xmin),np.rint(xmax)+1,1))
+        ax.set_xlim(xmin,xmax)
+        ax.set_ylim(xmin,xmax)
+
+    #Plot unit line if specified
+    if plot_unit_line:
+        unit_line = np.array([np.min((xmin,ymin)), np.max((xmax,ymax))])
+        ax.plot(unit_line,unit_line,color='#AAAAAA',linestyle='dashed',zorder=0)
+        #Use plot unit interval and fill_between to add shaded interval around unit line 
+        if plot_unit_interval:
+            ax.fill_between(unit_line,unit_line+plot_unit_interval,unit_line-plot_unit_interval,
+                            color='#AAAAAA', alpha=0.1,zorder=0)
+        
+    #Annotate PCC/slope if specified
+    if anno_PCC:
+        ax.text(s="PCC={:.3f}".format(pcc),
+                x=xmin+(xmax-xmin)*0.02,y=ymin+(ymax-ymin)*0.98,
+                ha='left', va='top', color='k',)
+    if anno_slope:
+        ax.text(s="Slope={:.3f}".format(slope),
+                x=xmin+(xmax-xmin)*0.02,y=ymin+(ymax-ymin)*0.92,
+                ha='left', va='top', color='k',)
+    return ax, pcc, slope
+
+def depth_detection_scatterplot(counts_df,locus_prefix='',
+                                ax=None,figsize=(3,3),
+                                log_transform_depth=True,
+                                xlim=(0,8),ylim=(-0.05,1.05),
+                                detection_count_thresh=1,
+                                metadata=pd.DataFrame(),hue_label='abundance_quantile',
+                                palette={},
+                                min_depth=0):
+    """For a counts profile, calculate per-sample depth and 
+    fraction of detection of genes. Intended for use on subsets of genes
+    from one genome at a time with locus_prefix. 
+    """
+    #If no axes object provided, make new figure
+    if not ax: 
+        fig,ax = plt.subplots(1,1,figsize=figsize)
+
+    #If locus_prefix is provided, subset to genes containing locus_prefix.
+    if len(locus_prefix) > 0: 
+        counts_df = counts_df.loc[counts_df.index.str.contains(locus_prefix),:]
+    depth_detection_df = pd.DataFrame(index=counts_df.columns)
+    #Per sample depth
+    depth_detection_df['depth'] = counts_df.sum()
+    depth_detection_df['detection'] = (counts_df>=detection_count_thresh).astype(int).mean(axis=0)
+    if hue_label != 'abundance_quantile':
+        if len(metadata) != len(depth_detection_df):
+            raise ValueError("Please provide metadata containing specified hue_label.\nmetadata must be indexed on sample identifiers.")
+        else: 
+            depth_detection_df[hue_label] = metadata[hue_label]
+    else: 
+        #Use abundance quantile hues:
+        #Encode highest matching abundance quantile as a discrete variable in depth_detection_df
+        quantiles = np.arange(0,1,0.1)
+        for i,q in enumerate(quantiles):
+            depth_quantile_cutoff = depth_detection_df[['depth']].quantile(q,axis=0).iloc[0]
+            depth_detection_df.loc[depth_detection_df['depth']>=depth_quantile_cutoff,hue_label] = i
+        #If no palette provided when using abundance_quantiles, use default cubehelix paeltte
+        if not palette:
+            palette = sns.color_palette("ch:start=.2,rot=-.3", n_colors=len(quantiles))
+        
+    #Further data processing - log transform depth if specified (default True)
+    if log_transform_depth:
+        #lgo10 transform with a pseudocount of 1 
+        depth_detection_df['depth'] = np.log10(depth_detection_df['depth']+1) 
+    #Further data processing - subset to samples with greater than min_abundance if provided
+    if min_depth > 0:
+        depth_detection_df = depth_detection_df.loc[depth_detection_df['depth']>min_depth]
+    #Scatter plot and return axes
+    ax = sns.scatterplot(depth_detection_df,
+                x='depth',y='detection',
+                hue=hue_label,palette=palette,
+                ax=ax,zorder=1
+                ) 
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    sns.move_legend(ax,'upper left',bbox_to_anchor=(1,1))
+    return ax,depth_detection_df
+
 
 
 def relative_abundance_barswarmplot(counts_df,sample_md,locus_prefix,x,hue=None,
