@@ -1,6 +1,44 @@
 import seaborn as sns 
 
 ###################################################################
+#   Functions for manipulating colors
+#https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib
+def lighten_color(color, amount=0.5):
+    """
+    Lightens the given color by multiplying (1-luminosity) by the given amount.
+    Input can be matplotlib color string, hex string, or RGB tuple.
+    """
+    #Some libraries for handling colors
+    import colorsys
+    import matplotlib.colors as mc
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+def desaturate_color(color, amount=0.5):
+    """
+    Desaturates the given color by multiplying (1-saturation) by the given amount.
+    Input can be matplotlib color string, hex string, or RGB tuple.
+    """
+    #Some libraries for handling colors
+    import colorsys
+    import matplotlib.colors as mc
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    h,l,s = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    #Desautrate by amount; amount = 0 -> retain color,
+    # higher amount = more gray (lower sat)
+    s_desat = s*(1-amount)
+    #Ensure [0,1] bounds (only an issue if amount not in [0,1])
+    s_desat = max(0,min(1,s*(1-amount)))
+    return colorsys.hls_to_rgb(h, l, s_desat)
+
+###################################################################
 #				General utility colors and palettes 			  #
 
 #Seaborn documentation on color palettes: 
@@ -64,6 +102,8 @@ MTX_TPR_soft_cmap = sns.color_palette("rocket", as_cmap=True)
 MTX_FPR_soft_cmap = sns.color_palette("mako", as_cmap=True)
 
 #Some alternative mono-chromatic heatmap palettes:
+MTX_light_to_red_cmap = sns.color_palette("Reds", as_cmap=True)
+MTX_light_to_blue_cmap = sns.color_palette("Blues", as_cmap=True)
 MTX_red_light_cmap = sns.color_palette("light:salmon_r", as_cmap=True)
 MTX_blue_light_cmap = sns.color_palette("light:b_r", as_cmap=True)
 
@@ -81,8 +121,31 @@ BG04_NC_conditions = ['Arn-negative control','Glc-negative control','Aos-negativ
 BG04_NC_palette = dict(zip(BG04_NC_conditions,
                            [gradient_five_red[0],gradient_five_blue[0],gradient_five_gray[0]]))
 
+########################################################################
+#	 Colors/ palettes related to BG05 - simulated noise mock communities #
+
+#Genome depth category colors for MAGs 
+
+#Default crest palette version - not used 
+# mag_categories_crest = sns.color_palette("crest", n_colors=4)
+# Using a modified version of crest colors with increased hue 
+# and luminance variation on the blue end 
+mag_categories_crest = ['#75BB92','#459490','#296485','#1F3566']
+mag_crest_whitened = [lighten_color(c,amount=0.9) for c in mag_categories_crest]
+mag_categories_cubehelix = sns.color_palette("ch:start=.2,rot=-.3", n_colors=4)
+#Binary light/dark blue colors 
+mag_binary_blue = {0:gradient_five_blue[0],
+                    1:gradient_five_blue[4]}
+
+#mock community categorical palettes (orange-gray, yellow-gray)
+desats = [0,0.1,0.2,0.3,0.5,0.7,0.8,1]
+arabinan_categorical_palette = [desaturate_color(new_arabinan,d) for d in desats]
+glucose_categorical_palette = [desaturate_color(glucose,d) for d in desats]
+
 ###################################################################
 #		Colors/ palettes related to MG02 - P. copri mouse models  #
 
 MG02_bar_palette = {"A":"#FEACA7","C":"#D4D4D4","D":"#9FC9EB"}
 MG02_point_palette = {"A":"#FF2804","C":"#000000","D":"#3E58A8"}
+
+

@@ -17,7 +17,7 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import seaborn as sns 
 import os, re, warnings 
-from sklearn.metrics import roc_curve, RocCurveDisplay
+from sklearn.metrics import roc_curve, roc_auc_score, RocCurveDisplay
 from statsmodels.stats.multitest import multipletests
 #sklearn ROC 
 
@@ -493,6 +493,74 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
         summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr]
     return summary_df
 
+def generate_sklearn_ROC_df(all_results,tp_features,
+                            score_col='qval',
+                            tn_features=pd.DataFrame(),
+                            fill_missing_predictions=False,
+                            all_features=pd.DataFrame()):
+    """
+    Generate a DataFrame compatible with sklearn ROC functions with columns
+    'y_true' and 'y_score'. 
+    
+    :param all_results: pd.DataFrame, required. Differential expression test 
+        results indexed on genes and containing label specified by score_col 
+        (P-values or equivalent).
+    :param tp_features: DataFrame or Series. Features which have y_true = 1 
+        (positive for DE)
+    :param score_col: Label in all_results, optional. Default: 'qval'. 
+    :param tn_features: DataFrame or Series. If not provided, then all features
+        not in tp_features will be assumed to be tn. Useful for cases where
+        AUROC should only be calculated on a subset of the total features. 
+    :return: DataFrame containing y_true and y_score values. 
+    :rtype: pd.DataFrame
+    """
+    if score_col not in all_results:
+        raise ValueError("Provided score_col {0} is not an existing label in all_results".format(score_col))
+
+    roc_df = pd.DataFrame(index=all_results.index,columns=["y_true","y_score"])
+    #sklearn ROC functions expect the following: 
+    #y_true: True binary labels, provided in the format of {0,1} or {-1,1} 
+    #   if pos_label not given
+    #y_score: Target scores, can either be probability estimates of the positive
+    #   class. Here, we define probability of positive class as 1-(score_col) for 
+    #   compatibility with DE testing 
+    roc_df['y_true'] = all_results.index.isin(tp_features.index).astype(int)
+    #Using 1-score_col assuming P-value type scores where low P-value associated
+    # with strong prediction of positive class (DE)
+    roc_df['y_score'] = 1 - all_results[score_col]
+    roc_df['y_score'] = roc_df['y_score'].replace(np.nan,0)
+    
+    #Populate scores for missing predictions
+    if fill_missing_predictions:
+        #Raise error if have not provided all_feature_set 
+        if len(all_features) == 0:
+            raise ValueError("Provide all_feature_set if fill_missing_predictions=True")
+        #Generate roc_df analog for missing features (those missing 
+        # from all_results but in all_features)
+        missing_features_index = all_features.index[~all_features.index.isin(all_results.index)]
+        missing_predictions_roc_df = pd.DataFrame(index=missing_features_index,
+                                                  columns=["y_true","y_score"])
+        #y_true using spiked_features membership
+        missing_predictions_roc_df['y_true'] = missing_predictions_roc_df.index\
+                                                .isin(tp_features.index)\
+                                                .astype(int)
+        #missing scores are assumed to be negative predictions 
+        missing_predictions_roc_df['y_score'] = 0
+        #concatenate missing results in 
+        roc_df = pd.concat((roc_df,missing_predictions_roc_df))
+
+    #If providing explicit subset of true negative features, subset roc_df 
+    if len(tn_features) > 0:
+        tp_roc = roc_df.loc[roc_df['y_true']==1]
+        #safe handling of tn_features (i.e. if not fill_missing and some TN 
+        # features not present in roc_df)
+        tn_roc = roc_df.loc[(roc_df['y_true']==0) & 
+                            (roc_df.index.isin(tn_features.index))]
+        #Recombine
+        roc_df = pd.concat((tp_roc,tn_roc))
+
+    return roc_df
+
 def mannual_ROC_range(all_results,spiked_features,tpr_col='qval',fpr_col='',
                         alpha_step_size=0.005,log_sample=0,log_sample_num=20,n_features=0,
                         subset_to_tested=True):
@@ -662,8 +730,14 @@ def define_TP_TN_gene_sets(all_results,locus_prefix_filter='',
 def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features,
                                             dataset_name="",model="",alpha=0.05,
                                             sig_col="qval",fpr_sig_col="",skip_tpr=False,
+                                            check_direction=True,
+                                           results_sign_col="coef",
+                                           results_cols_to_retain=[],
                                             include_ppv=True,
-                                           check_direction=True,results_sign_col="coef"):
+                                            include_auroc=False,
+                                            fill_missing_predictions=True,
+                                            all_features=pd.DataFrame(),
+                                           ):
     """Determine basic summary statistics about statistical test results contained in all_results. 
     Requires pre-defined lists of true_sig_features and true_ns_features from which TPR and FPR will be calculated.
     
@@ -690,13 +764,16 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
     @param results_sign_col: name of variable in all_results, optional. If check_direction is True, signs of values 
     in this column must correspond with the direction in spiked_features in order for a significant result to be 
     called a true positive. 
+    @param results_cols_to_retain: labels in all_results, default []. 
+        If provided, retain additional result columns in summary_df. 
     """
     
     #Summary DataFrame initialization
+    summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR']
     if include_ppv:
-        summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR','PPV','NPV']
-    else:
-        summary_df_columns = ['dataset','model','n_tested','n_true_sig','n_true_ns','TPR','FPR']
+        summary_df_columns = summary_df_columns+['PPV','NPV']
+    if include_auroc: 
+        summary_df_columns = summary_df_columns+['AUROC']
     summary_df = pd.DataFrame(columns=summary_df_columns)
     #Number of tested and spiked features 
     n_tested, n_true_sig,n_true_ns = len(all_results),len(true_sig_features),len(true_ns_features)
@@ -726,16 +803,46 @@ def invitro_benchmarking_summary(all_results, true_sig_features,true_ns_features
                         (all_results.index.isin(true_ns_features.index))]
     fpr = len(fp_df)/n_true_ns
 
-    #PPV (precision) calculation: 
-    ppv = len(tp_df)/np.max([(len(tp_df)+len(fp_df)),1])
-    #NPV calculation:
-    npv = len(tn_df)/np.max([(len(tn_df)+len(fn_df)),1])
-    
-    #Return summary df with metrics
+    #Define summary metrics
+    summary_metrics = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr]
     if include_ppv:
-        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr,ppv,npv]
-    else:
-        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_true_sig,n_true_ns,tpr,fpr]
+        #PPV (precision) calculation: 
+        ppv = len(tp_df)/np.max([(len(tp_df)+len(fp_df)),1])
+        #NPV calculation:
+        npv = len(tn_df)/np.max([(len(tn_df)+len(fn_df)),1])
+        #Add to summary metrics 
+        summary_metrics = summary_metrics + [ppv,npv]
+    if include_auroc:
+        #AUROC calculation 
+        # First, generate sklearn compatible ROC df 
+        #RocCurveDisplay expects the following information: 
+        #y_true: True binary labels, provided in the format of {0,1} or {-1,1} 
+        #   if pos_label not given
+        #y_score: Target scores, can either be probability estimates of the positive
+        #   class. Here, we define probability of positive class as 1-(score_col) for 
+        #   compatibility with DE testing 
+        roc_df = generate_sklearn_ROC_df(all_results,
+                                        tp_features=true_sig_features,
+                                        score_col=sig_col,
+                                        tn_features=true_ns_features,
+                                        fill_missing_predictions=fill_missing_predictions,
+                                        all_features=all_features)
+        auc = roc_auc_score(y_true=roc_df['y_true'],
+                            y_score=roc_df['y_score'])     
+        #Add to summary metrics                               
+        summary_metrics = summary_metrics + [auc]
+    #Return summary df with metrics
+    summary_df.loc[0,:] = summary_metrics
+    #Retain select DE results columns if specified 
+    if len(results_cols_to_retain) > 0:
+        for col in results_cols_to_retain:
+            results_col = all_results[col]
+            #Automatic handling of results_cols: 
+            # mean if numeric, mode otherwise (i.e. metadata)
+            if results_col.dtype == int or results_col.dtype == float:
+                summary_df[col] = results_col.mean()
+            else: 
+                summary_df = results_col.mode()
     return summary_df
 
 ###====================================================================================###
@@ -793,7 +900,9 @@ def tpr_fpr_heatmaps(summary_df,x,y,
                     figures_dir="figures_pdf",figure_fpath_basename="",
                     tpr_cmap=MTX_colors.MTX_TPR_cmap,
                     fpr_cmap=MTX_colors.MTX_FPR_cmap,
-                    tpr_vmax=1,fpr_vmax=1,annot=True,precision_decimals=None,
+                    tpr_vmax=1,fpr_vmax=1,
+                    tpr_vmin=0,fpr_vmin=0,
+                    annot=True,precision_decimals=None,
                     na_facecolor="#BBBBBB",xlabel="",ylabel="",
                     titles=['True Positive Rate','False Positive Rate'],
                     subplot=False,figsize=(8,4)):
@@ -862,12 +971,17 @@ def tpr_fpr_heatmaps(summary_df,x,y,
         fig1, ax1 = plt.subplots(1,1,figsize=figsize)
         fig2, ax2 = plt.subplots(1,1,figsize=figsize)
     #Heatmap calls for TPR and FPR pivots
-    for pivot_df, ax, vmax, cmap,title in zip([summary_tpr_pivot,summary_fpr_pivot],
-                                        [ax1,ax2],
-                                        [tpr_vmax,fpr_vmax],
-                                        [tpr_cmap,fpr_cmap],
-                                        titles):
-        sns.heatmap(pivot_df,annot=annot,vmin=0,vmax=vmax,cmap=cmap,ax=ax,
+    for pivot_df, ax, vmax, vmin, cmap,title in zip([summary_tpr_pivot,summary_fpr_pivot],
+                                                    [ax1,ax2],
+                                                    [tpr_vmax,fpr_vmax],
+                                                    [tpr_vmin,fpr_vmin],
+                                                    [tpr_cmap,fpr_cmap],
+                                                    titles):
+        if precision_decimals:
+            fmt = '.{0}f'.format(precision_decimals)
+        else: 
+            fmt = '.2g'
+        sns.heatmap(pivot_df,annot=annot,fmt=fmt,vmin=vmin,vmax=vmax,cmap=cmap,ax=ax,
                     linewidths=0.5,linecolor='black')
         ax.set_facecolor(na_facecolor)
         ax.set_title(title)
@@ -953,9 +1067,45 @@ def ppv_npv_heatmaps(summary_df,x,y,
                     na_facecolor=na_facecolor,xlabel=xlabel,ylabel=ylabel,
                     titles=['Positive Predictive Value','Negative Predictive Value'],
                     subplot=subplot,figsize=figsize)
+    
+def auroc_heatmaps(summary_df,x,y,
+                    auroc_col='AUROC',
+                    ordered_pivot_x=[],ordered_pivot_y=[],
+                    figures_dir="figures_pdf",figure_fpath_basename="",
+                    auroc_cmap1=MTX_colors.MTX_light_to_red_cmap,
+                    auroc_cmap2=MTX_colors.MTX_light_to_blue_cmap,
+                    auroc_vmax=1,auroc_vmin=0.5,annot=True,precision_decimals=None,
+                    na_facecolor="#BBBBBB",xlabel="",ylabel="",
+                    subplot=False,figsize=(8,4)):
+    """
+    I'm really lazy and this is just a wrapper for tpr_fpr_heatmaps with different 
+    default labels palettes.
+
+    As a result, this will create two plots both using AUROC but with 
+    two different palettes because I haven't committed to an aesthetic yet 
+    :sunglasses_emoji:
+    """
+    tpr_fpr_heatmaps(summary_df,x,y,
+                    ordered_pivot_x=ordered_pivot_x,
+                    ordered_pivot_y=ordered_pivot_y,
+                    tpr_col=auroc_col,fpr_col=auroc_col,
+                    figures_dir=figures_dir,
+                    figure_fpath_basename=figure_fpath_basename,
+                    tpr_cmap=auroc_cmap1,
+                    fpr_cmap=auroc_cmap2,
+                    tpr_vmax=auroc_vmax,fpr_vmax=auroc_vmax,
+                    tpr_vmin=auroc_vmin,fpr_vmin=auroc_vmin,
+                    annot=annot,
+                    precision_decimals=precision_decimals,
+                    na_facecolor=na_facecolor,xlabel=xlabel,ylabel=ylabel,
+                    titles=['AUROC','AUROC'],
+                    subplot=subplot,figsize=figsize)
 
 
 def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
+                                  tn_features=pd.DataFrame(),
+                                  fill_missing_predictions=False,
+                                all_features=pd.DataFrame(),
                                 model_name="",title="",ax=None,
                                 plot_chance_level=True,
                                 model_color=sns.color_palette("tab10")[0],
@@ -967,7 +1117,7 @@ def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
     p-values, separate evaluation of TPR and FPR requires a separate function (see manual_ROC_plot_single_model). 
     """
     if not ax: 
-        fig,ax = plt.subplots(figsize=(6,6))
+        fig,ax = plt.subplots(figsize=(4,4))
     roc_df = pd.DataFrame(index=all_results.index,columns=["y_true","y_score"])
     #RocCurveDisplay expects the following information: 
     #y_true: True binary labels, provided in the format of {0,1} or {-1,1} 
@@ -975,8 +1125,14 @@ def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
     #y_score: Target scores, can either be probability estimates of the positive
     #   class. Here, we define probability of positive class as 1-(score_col) for 
     #   compatibility with DE testing 
-    roc_df['y_true'] = all_results.index.isin(spiked_features.index).astype(int)
-    roc_df['y_score'] = 1 - all_results[score_col]
+    roc_df = generate_sklearn_ROC_df(all_results,
+                                     tp_features=spiked_features,
+                                    score_col=score_col,
+                                    tn_features=tn_features,
+                                    fill_missing_predictions=fill_missing_predictions,
+                                    all_features=all_features)
+
+        
     tpr, fpr, thresholds = roc_curve(y_true=roc_df['y_true'],y_score=roc_df['y_score'],pos_label=1)
     RocCurveDisplay.from_predictions(y_true=roc_df['y_true'],y_pred=roc_df['y_score'],
                                     name=model_name,plot_chance_level=plot_chance_level,
@@ -988,9 +1144,14 @@ def sklearn_ROC_plot_single_model(all_results,spiked_features,score_col='qval',
     plt.axis("square")
     return roc_df,tpr,fpr,thresholds
 
-def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,score_col='qval',
+def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,
+                                     score_col='qval',
+                                     tn_features=pd.DataFrame(),
+                                     fill_missing_predictions=False,
+                                    all_features=pd.DataFrame(),
                                     title="",plot_chance_level=True,palette=[],ax=None,
-                                    line_alpha=1):
+                                    line_alpha=1
+                                    ):
     """Use sklearn built-in ROC curve plotting for multiple DataFrames of DE test results. 
 
     Note: Given how Zhang et al. calculate TPR and FPR respectively from FDR adjusted and nominal/unadjusted 
@@ -1013,7 +1174,7 @@ def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,score_c
     #New matplotlib figure if no axes provided.
     n_models = len(models_results_dict)
     if not ax:
-        fig,ax = plt.subplots(figsize=(6,6))
+        fig,ax = plt.subplots(figsize=(4,4))
     #If no palette provided, default to seaborn colorblind.  
     if len(palette) == 0:
         if n_models <= 10: 
@@ -1047,14 +1208,18 @@ def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,score_c
                                             score_col=score_col,
                                             model_name=model,
                                             model_color=model_color,line_alpha=line_alpha,    
-                                            ax=ax,plot_chance_level=True)
+                                            ax=ax,plot_chance_level=True,
+                                            fill_missing_predictions=fill_missing_predictions,
+                                            all_features=all_features)
         else:
             #For all others, plot_chance_level=False 
             sklearn_ROC_plot_single_model(model_results,spiked_features,
                                             score_col=score_col,
                                             model_name=model,
                                             model_color=model_color,line_alpha=line_alpha,    
-                                            ax=ax,plot_chance_level=False)
+                                            ax=ax,plot_chance_level=False,
+                                            fill_missing_predictions=fill_missing_predictions,
+                                            all_features=all_features)
     plt.title(title)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")

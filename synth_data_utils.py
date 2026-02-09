@@ -33,7 +33,6 @@ zhang_5TE_datasets = ['true-exp-low','true-exp-med','true-exp','true-combo-bug-e
 
 def load_single_dataset(dataset,datatype,
                         synth_dir="synth/synth_mgx_mtx",
-                        synth_original_dir = "synth/synth_mgx_mtx_original",
                         depth_normalize=False):
     """
     Load a single dataset datatype from standardized directory structure.  
@@ -43,7 +42,7 @@ def load_single_dataset(dataset,datatype,
     The feature data or metadata to load.
     """
     if datatype == 'mtx_spiked': #mtx_spiked are in synth_mgx_mtx_original 
-        fpath = os.path.join(synth_original_dir,"{0}.mtx_spiked.tsv".format(dataset))
+        fpath = os.path.join(synth_dir,"{0}.mtx_spiked.tsv".format(dataset))
         spiked_features = pd.read_csv(fpath,sep='\t',names=["feature","direction"]).set_index('feature')
         return spiked_features
     else: 

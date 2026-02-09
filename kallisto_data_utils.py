@@ -717,6 +717,17 @@ def taxon_DE_fractions(results_df,bug_df,alpha=0.05,sig_label='qval',subset_to_t
         bug_DE_fractions_df.loc[bug,'sig_up_fraction'] = sig_up_fraction
     return bug_DE_fractions_df
 
+def get_samples_depth_detection(counts_df,
+                        detection_count_thresh=1,
+                        log_depth=False):
+    depth_detection_df = pd.DataFrame(index=counts_df.columns)
+    #Per sample depth
+    depth_detection_df['depth'] = counts_df.sum()
+    depth_detection_df['detection'] = (counts_df>=detection_count_thresh).astype(int).mean(axis=0)
+    if log_depth:
+        depth_detection_df['depth'] = np.log10(depth_detection_df['depth']+1)
+    return depth_detection_df
+
 ###============================================================================###
 ### Data Visualization - generic visualization functions  
 ###============================================================================###
@@ -1109,6 +1120,7 @@ def depth_detection_scatterplot(counts_df,locus_prefix='',
                                 ax=None,figsize=(3,3),
                                 log_transform_depth=True,
                                 xlim=(0,8),ylim=(-0.05,1.05),
+                                zorder=0,
                                 detection_count_thresh=1,
                                 metadata=pd.DataFrame(),hue_label='abundance_quantile',
                                 palette={},
@@ -1124,10 +1136,10 @@ def depth_detection_scatterplot(counts_df,locus_prefix='',
     #If locus_prefix is provided, subset to genes containing locus_prefix.
     if len(locus_prefix) > 0: 
         counts_df = counts_df.loc[counts_df.index.str.contains(locus_prefix),:]
-    depth_detection_df = pd.DataFrame(index=counts_df.columns)
-    #Per sample depth
-    depth_detection_df['depth'] = counts_df.sum()
-    depth_detection_df['detection'] = (counts_df>=detection_count_thresh).astype(int).mean(axis=0)
+    #Generate depth and detection metrics for all samples in counts_df
+    depth_detection_df = get_samples_depth_detection(counts_df,
+                                                     log_depth=log_transform_depth,
+                                                     detection_count_thresh=detection_count_thresh)
     if hue_label != 'abundance_quantile':
         if len(metadata) != len(depth_detection_df):
             raise ValueError("Please provide metadata containing specified hue_label.\nmetadata must be indexed on sample identifiers.")
@@ -1144,10 +1156,6 @@ def depth_detection_scatterplot(counts_df,locus_prefix='',
         if not palette:
             palette = sns.color_palette("ch:start=.2,rot=-.3", n_colors=len(quantiles))
         
-    #Further data processing - log transform depth if specified (default True)
-    if log_transform_depth:
-        #lgo10 transform with a pseudocount of 1 
-        depth_detection_df['depth'] = np.log10(depth_detection_df['depth']+1) 
     #Further data processing - subset to samples with greater than min_abundance if provided
     if min_depth > 0:
         depth_detection_df = depth_detection_df.loc[depth_detection_df['depth']>min_depth]
@@ -1155,7 +1163,7 @@ def depth_detection_scatterplot(counts_df,locus_prefix='',
     ax = sns.scatterplot(depth_detection_df,
                 x='depth',y='detection',
                 hue=hue_label,palette=palette,
-                ax=ax,zorder=1
+                ax=ax,zorder=zorder,linewidth=0.25,
                 ) 
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
