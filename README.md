@@ -1,4 +1,4 @@
-<img width="468" height="11" alt="image" src="https://github.com/user-attachments/assets/2525e61a-1043-41e8-8f65-80d5490a3339" /># MTX_utils
+MTX_utils
 Benchmarking of metatranscriptomic differential expression using synthetic and in vitro mock communities.
 
 If you use this code, please cite our manuscript: 
