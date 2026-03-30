@@ -1,9 +1,9 @@
-# MTX_utils
+<img width="468" height="11" alt="image" src="https://github.com/user-attachments/assets/2525e61a-1043-41e8-8f65-80d5490a3339" /># MTX_utils
 Benchmarking of metatranscriptomic differential expression using synthetic and in vitro mock communities.
 
 If you use this code, please cite our manuscript: 
 
-Lee et al., "Enhancing inference of differential gene expression in metatranscriptomes from human microbial communities" (Under review).
+Lee EM, McNulty NP, Hibberd MC, Cheng J, Ahsan K, Chang HW, Cohen BA, Gordon JI. "Enhancing inference of differential gene expression in metatranscriptomes from human microbial communities" Nat. Commun. (2026). In Press.
 
 This repository contains the following modules: 
 
