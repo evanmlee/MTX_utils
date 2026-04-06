@@ -391,6 +391,10 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
                                            significant_results={},alpha=0.05,sig_col="qval",
                                             fpr_sig_col="",skip_tpr=False,
                                             include_ppv=True,
+                                            include_auroc=False,
+                                            fill_missing_predictions=True,
+                                            all_features=pd.DataFrame(),
+                                            tn_features=pd.DataFrame(),
                                            check_direction=False,results_sign_col="coef"):
     """Determine basic summary statistics about statistical test results contained in all_results and the set of 
     true simulated DE spiked_features.
@@ -437,11 +441,12 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     else:
         raise ValueError("Provided alpha is outside of (0,1] range. Alternatively, provide significant_results.")   
     #Summary DataFrame initialization
+    summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR"]
     #Making include_ppv an option to support old behavior in previous scripts 
     if include_ppv:
-        summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR","PPV","NPV"]
-    else: 
-        summary_df_columns = ["dataset","model","n_tested","n_spiked","TPR","FPR"]
+        summary_df_columns = summary_df_columns + ["PPV","NPV"]
+    if include_auroc:
+        summary_df_columns = summary_df_columns + ["AUROC"]
     summary_df = pd.DataFrame(columns=summary_df_columns)
     #Number of tested and spiked features 
     n_tested, n_spiked = len(all_results.dropna(axis=0,how='any')),len(spiked_features)
@@ -477,6 +482,25 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
     else: #for null datasets, these metrics are undefined. 
         ppv = np.nan 
         npv = np.nan
+
+    if include_auroc:
+        #AUROC calculation 
+        # First, generate sklearn compatible ROC df 
+        #RocCurveDisplay expects the following information: 
+        #y_true: True binary labels, provided in the format of {0,1} or {-1,1} 
+        #   if pos_label not given
+        #y_score: Target scores, can either be probability estimates of the positive
+        #   class. Here, we define probability of positive class as 1-(score_col) for 
+        #   compatibility with DE testing 
+        roc_df = generate_sklearn_ROC_df(all_results,
+                                        tp_features=spiked_features,
+                                        score_col=sig_col,
+                                        tn_features=tn_features,
+                                        fill_missing_predictions=fill_missing_predictions,
+                                        all_features=all_features)
+        auc = roc_auc_score(y_true=roc_df['y_true'],
+                            y_score=roc_df['y_score'])     
+
     #Printed output
     if print_output:
         print("Dataset: {0}".format(dataset_name))
@@ -487,10 +511,13 @@ def zhang_significant_spiked_correspondence(all_results, spiked_features=pd.Data
         if include_ppv:
             print("Positive predictive value: {:.3f}".format(ppv))
             print("Negative predictive value: {:.3f}".format(npv))
-    if include_ppv: #include ppv/npv metrics in output dataframe
-        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr,ppv,npv]
-    else:
-        summary_df.loc[0,:] = [dataset_name,model,n_tested,n_spiked,tpr,fpr]
+    summary_metrics = [dataset_name,model,n_tested,n_spiked,tpr,fpr]
+    #Handle optionally included metrics 
+    if include_ppv:
+        summary_metrics = summary_metrics + [ppv,npv]
+    if include_auroc:
+        summary_metrics = summary_metrics + [auc]
+    summary_df.loc[0,:] = summary_metrics
     return summary_df
 
 def generate_sklearn_ROC_df(all_results,tp_features,
@@ -1205,6 +1232,7 @@ def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,
         if plot_chance_level and i==n_models-1:
             #plot_chance_level=True for last plot 
             sklearn_ROC_plot_single_model(model_results,spiked_features,
+                                          tn_features=tn_features,
                                             score_col=score_col,
                                             model_name=model,
                                             model_color=model_color,line_alpha=line_alpha,    
@@ -1214,6 +1242,7 @@ def sklearn_ROC_plot_multiple_models(models_results_dict,spiked_features,
         else:
             #For all others, plot_chance_level=False 
             sklearn_ROC_plot_single_model(model_results,spiked_features,
+                                          tn_features=tn_features,
                                             score_col=score_col,
                                             model_name=model,
                                             model_color=model_color,line_alpha=line_alpha,    

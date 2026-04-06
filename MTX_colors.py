@@ -139,8 +139,13 @@ mag_binary_blue = {0:gradient_five_blue[0],
 
 #mock community categorical palettes (orange-gray, yellow-gray)
 desats = [0,0.1,0.2,0.3,0.5,0.7,0.8,1]
-arabinan_categorical_palette = [desaturate_color(new_arabinan,d) for d in desats]
-glucose_categorical_palette = [desaturate_color(glucose,d) for d in desats]
+#Seaborn built-in alternative versions
+arabinan_categorical_palette = sns.color_palette("dark:salmon_r", n_colors=8)
+glucose_categorical_palette = sns.dark_palette(glucose, reverse=True, n_colors=8)
+#Desaturated (color -> gray) version; doesn't achieve great visual separation,
+# hence, we use the seaborn builtin analogs above
+# arabinan_categorical_palette = [desaturate_color(new_arabinan,d) for d in desats]
+# glucose_categorical_palette = [desaturate_color(glucose,d) for d in desats]
 
 ###################################################################
 #		Colors/ palettes related to MG02 - P. copri mouse models  #

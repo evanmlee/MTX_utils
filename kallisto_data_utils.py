@@ -738,6 +738,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
                 ax=None,figsize=(4,4),title='',
                 xlim=(-10,10),ylim=(-0.5,7),markersize=5,linewidth=0,
                 downsample=False,downsample_class=0,downsample_fraction=0.1,
+                downsample_lfc_lim=0.2,
                 palette={True:sns.color_palette('colorblind')[0],False:MTX_colors.NS_gray},
                 legend=True):
     '''Generate a volcano plot of differential testing results, plotting logFC vs -log(p_value) for
@@ -771,7 +772,7 @@ def volcano_plot(results_df,logFC_label='coef',pval_label='qval',
     # to downsample points to reduce redundant elements in plot 
     if downsample:
         data_to_downsample = results_df[(results_df[hue_label]==downsample_class) & 
-                                        (np.abs(results_df[logFC_label])<0.2)] #downsample points with low logFC and matching downsample_class
+                                        (np.abs(results_df[logFC_label])<downsample_lfc_lim)] #downsample points with low logFC and matching downsample_class
         data_as_is = results_df[~results_df.index.isin(data_to_downsample.index)]
         np.random.seed(42)
         downsampled = data_to_downsample.sample(frac=downsample_fraction)

@@ -44,35 +44,51 @@ def genome_counts_mean_variance_df(genome_mtx,
                                    depth_normalize=True,
                                    log_transform=True,
                                    log_pseudocount=1,
-                                   estimate_dispersions=False):
+                                   estimate_dispersions=False,
+                                   sub_min_dispersion=False,
+                                   min_dispersion=10**-8
+                                   ):
     #If depth_normalize, scale all samples so that they have equal depths 
     # to highest depth sample
     if depth_normalize:
+        print("Normalizing by depth using scaling factors in genome_counts_mean_variance_df")
         #Replace call handles 0 total genome counts (0 counts for all genes)
         # These will be left intact when scaling counts
         scaling_factors = genome_mtx.sum().max()/(genome_mtx.sum().replace(0,1))
         # scaling_factors = genome_mtx.sum().min()/(genome_mtx.sum().replace(0,1))
+        
         genome_mtx = np.rint(genome_mtx*scaling_factors).astype(int)
     #Generate summary stats DF - indexed on genes, metrics as columns
-    gene_summary_metrics = pd.DataFrame(index=genome_mtx.index)
-    gene_summary_metrics['mean'] = genome_mtx.mean(axis=1)
+    mean_var_df = pd.DataFrame(index=genome_mtx.index)
+    mean_var_df['mean'] = genome_mtx.mean(axis=1)
     #Variance metrics calculation:
-    gene_summary_metrics['var'] = genome_mtx.var(axis=1)
-    gene_summary_metrics['std'] = genome_mtx.std(axis=1)
+    mean_var_df['var'] = genome_mtx.var(axis=1)
+    mean_var_df['std'] = genome_mtx.std(axis=1)
     #Log transform metrics into separate columns if applicable 
     if log_transform:
-        for col in gene_summary_metrics.columns:
+        for col in mean_var_df.columns:
             log_col = 'log_{0}'.format(col)
-            gene_summary_metrics[log_col] = np.log10(gene_summary_metrics[col]+log_pseudocount)
+            mean_var_df[log_col] = np.log10(mean_var_df[col]+log_pseudocount)
     #Use NB mean-variance relationship to estimate dispersions for each gene 
     # We use the method of moments method here even though it is invalid for 
     # underdispersed counts; we'll be representing dispersion across the 
     # genome with its median dispersion (c/w Gierlinkski et al Bioinformatics 2015)
     if estimate_dispersions:
-        gene_summary_metrics['dispersion'] = (gene_summary_metrics['var']-\
-                                              gene_summary_metrics['mean'])/\
-                                                gene_summary_metrics['mean']**2
-    return gene_summary_metrics
+        mean_var_df['dispersion'] = (mean_var_df['var']-\
+                                              mean_var_df['mean'])/\
+                                                mean_var_df['mean']**2
+        if sub_min_dispersion:
+            #Substitute in minDisp for edge cases where MOM dispersioon is not defined 
+            # or where MOM estimates are below min_dispersion
+            # The value used here is based on DESeq2's min_disp value: 
+            # https://github.com/thelovelab/DESeq2/blob/devel/R/core.R (line 658)
+            mean_var_df.loc[(mean_var_df['mean']==0) | 
+                            (mean_var_df['dispersion']<min_dispersion),
+                            'dispersion'] = min_dispersion
+        #Calculate log dispersion and BCV for visualization purposes 
+        mean_var_df['log_dispersion'] = np.log10(mean_var_df['dispersion'])
+        mean_var_df['BCV'] = np.sqrt(mean_var_df['dispersion'])
+    return mean_var_df
 
 #Bootstrapping mtx profiles 
 def bootstrap_mtx_sample(genome_mtx,axis=1):
