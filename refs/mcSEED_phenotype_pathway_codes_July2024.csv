@@ -1,0 +1,190 @@
+﻿Phenotype,Functional pathway,Functional category
+B1,"TPP cofactor, de novo synthesis",Vitamins/cofactors
+B2,"FMN/FAD cofactors, de novo synthesis",Vitamins/cofactors
+B3,"NAD(P) cofactors, de novo synthesis",Vitamins/cofactors
+B5,"coenzyme A, de novo synthesis",Vitamins/cofactors
+B6,"PLP/PMP cofactors, de novo synthesis",Vitamins/cofactors
+B7,"biotin cofactor, de novo synthesis",Vitamins/cofactors
+B9,"folate cofactors, de novo synthesis",Vitamins/cofactors
+B12,"cobalamin cofactors, de novo synthesis",Vitamins/cofactors
+Q,"queuosine, de novo synthesis",Vitamins/cofactors
+LA,"lipoate cofactor, de novo synthesis",Vitamins/cofactors
+MQ,"vitamin K, de novo synthesis",Vitamins/cofactors
+Arg,arginine biosynthesis,Amino acid synthesis
+Lys,lysine biosynthesis,Amino acid synthesis
+His,histidine biosynthesis,Amino acid synthesis
+Trp,tryptophan biosynthesis,Amino acid synthesis
+Tyr,tyrosine biosynthesis,Amino acid synthesis
+Phe,phenylalanine biosynthesis,Amino acid synthesis
+Chor,chorismate biosynthesis,Amino acid synthesis
+Leu,leucine biosynthesis,Amino acid synthesis
+Ile,isoleucine biosynthesis,Amino acid synthesis
+Val,valine biosynthesis,Amino acid synthesis
+Thr,threonine biosynthesis,Amino acid synthesis
+Ser,serine biosynthesis,Amino acid synthesis
+Cys,cysteine biosynthesis,Amino acid synthesis
+Gly,glycine biosynthesis,Amino acid synthesis
+Met,methionine biosynthesis,Amino acid synthesis
+Pro,proline biosynthesis,Amino acid synthesis
+Glu,glutamate biosynthesis,Amino acid synthesis
+Gln,glutamine biosynthesis,Amino acid synthesis
+Asp,aspartate biosynthesis,Amino acid synthesis
+Asn,asparagine biosynthesis,Amino acid synthesis
+Pur,purine biosynthesis,Nucleotide synthesis
+Pyr,pyrimidine biosynthesis,Nucleotide synthesis
+Propionate,propionate production,Fermentation products
+Butyrate,butyrate production,Fermentation products
+Acetate,acetate production,Fermentation products
+Formate,formate production,Fermentation products
+L-Lactate,L-lactate production,Fermentation products
+D-Lactate,D-lactate production,Fermentation products
+Ethanol,ethanol production,Fermentation products
+Succinate,succinate production,Fermentation products
+TMA,Trimethylamine production,Bioactive production
+LPS,Lipopolysaccharide production,Bioactive production
+GABA,GABA biosynthesis,Bioactive production
+HA,histamine production,Bioactive production
+Trp_I,indole production,Bioactive production
+Trp_IA,indoleacetate production,Bioactive production
+Trp_TA,tryptamine production,Bioactive production
+Trp_IL,indolelactate production,Bioactive production
+His_d,histidine degradation,Amino acid degradation
+Lys_d,lysine degradation,Amino acid degradation
+Met_d,methionine degradation,Amino acid degradation
+Pro_d,proline degradation,Amino acid degradation
+Thr_d,threonine degradation,Amino acid degradation
+Trp_d,tryptophan degradation,Amino acid degradation
+HP_d,hydroxyproline degradation,Amino acid degradation
+Arg_d,arginine degradation,Amino acid degradation
+Ser_d,serine degradation,Amino acid degradation
+Gly_d,glycine degradation,Amino acid degradation
+Ala_d,alanine degradation,Amino acid degradation
+Urea_d,urea degradation,Amino acid degradation
+Eut_ut,ethanolamine utilization,Other catabolic pathways
+But_ut,butyrate utilization,Other catabolic pathways
+PD_ut,propanediol utilization,Other catabolic pathways
+Put_ut,putrescine utilization,Other catabolic pathways
+Tau_ut,taurine utilization,Other catabolic pathways
+Tar_ut,tartrate utilization,Other catabolic pathways
+Nuc_ut,nucleosides utilization,Other catabolic pathways
+Pur_ut,purine utilization,Other catabolic pathways
+Pyr_ut,pyrimidine utilization,Other catabolic pathways
+GABA_d,GABA degradation,Other catabolic pathways
+Llac_ut,D-lactate utilization,Other catabolic pathways
+Dlac_ut,L-lactate utilization,Other catabolic pathways
+CA_d,cholic acid deconjugation,Bile acids
+CA_t_3,cholic acid transformation to 3-dehydro-CA ,Bile acids
+CA_t_7,cholic acid transformation to 7-dehydro-CA ,Bile acids
+CA_t_12,cholic acid transformation to 12-dehydro-CA ,Bile acids
+CA_t_DCA1,cholic acid transformation to deoxycholic acid precucrsor ,Bile acids
+CA_t_DCA2,precursor transformation to deoxycholic acid,Bile acids
+DMSO_r,DMSO reduction,Respiration
+TMAO_r,TMAO reduction,Respiration
+NAR,nitrate reduction,Respiration
+aNIR,nitrite reduction to ammonium,Respiration
+dNIR,nitrite reduction to nitric oxide,Respiration
+NOR,nitric oxide reduction,Respiration
+NOS,nitrous oxide reduction,Respiration
+Aer,aerobes,Respiration
+mAer,microaerobes,Respiration
+TTR,tetrathionate reduction ,Respiration
+TSR,thiosulfate reduction ,Respiration
+SR,sulfite reduction ,Respiration
+aAOS,alpha-arabinooligosaccharides utilization,Carbohydrate utilization
+All,allose utilization,Carbohydrate utilization
+Ara,arabinose utilization,Carbohydrate utilization
+Asc,ascorbate utilization,Carbohydrate utilization
+Atl,arabinitol utilization,Carbohydrate utilization
+aXyl,alpha-xylosides utilization,Carbohydrate utilization
+bAOS,beta-arabinooligosaccharides utilization,Carbohydrate utilization
+Bgl,beta-glucosides utilization,Carbohydrate utilization
+bMAN,beta-mannan degradation,Carbohydrate utilization
+bMnOS,beta-mannooligosaccharides utilization,Carbohydrate utilization
+Chb,chitobiose utilization,Carbohydrate utilization
+ddGlcA,unsaturated glucuronate utilization,Carbohydrate utilization
+Dgal,D-galactonate utilization,Carbohydrate utilization
+dRib,deoxyribose utilization ,Carbohydrate utilization
+Fcs,fucosides utilization,Carbohydrate utilization
+FOS,fructooligosaccharides utilization,Carbohydrate utilization
+Fru,fructose utilization,Carbohydrate utilization
+FruAsn,fructoseasparagine utilization,Carbohydrate utilization
+FruLys,fructoselysine utilization,Carbohydrate utilization
+Fuc,fucose utilization,Carbohydrate utilization
+Gal,galactose utilization,Carbohydrate utilization
+GalA,galacturonate utilization,Carbohydrate utilization
+GalAs,oligogalacturonate utilization,Carbohydrate utilization
+GalN,galactosamine utilization,Carbohydrate utilization
+GalNAc,N-acetylgalactosamine utilization,Carbohydrate utilization
+Glc,glucose utilization,Carbohydrate utilization
+GlcA,glucuronate utilization,Carbohydrate utilization
+GlcAs,glucuronides utilization,Carbohydrate utilization
+GlcLys,glucoselysine utilization,Carbohydrate utilization
+GlcNAc,N-acetylglucosamine utilization,Carbohydrate utilization
+Glt,glycerate utilization,Carbohydrate utilization
+Gmt,glucosaminate utilization,Carbohydrate utilization
+GNB,galacto-N-biose utilization,Carbohydrate utilization
+Gnt,gluconate utilization,Carbohydrate utilization
+GOS,galactooligosaccharides utilization,Carbohydrate utilization
+Gtl,galactitol utilization,Carbohydrate utilization
+Hyl,hyaluronic acid utilization,Carbohydrate utilization
+Ino,inositol utilization,Carbohydrate utilization
+Lac,lactose utilization,Carbohydrate utilization
+Lfuc,fuconate utilization,Carbohydrate utilization
+Lgal,L-galactonate utilization,Carbohydrate utilization
+Lgul,gulonate utilization,Carbohydrate utilization
+LNB,lacto-N-biose utilization,Carbohydrate utilization
+Mal,maltose utilization,Carbohydrate utilization
+Man,mannose utilization,Carbohydrate utilization
+ManGlt,mannosylglycerate utilization,Carbohydrate utilization
+ManNAc,N-acetylmannosamine utilization,Carbohydrate utilization
+Mel,melibiose utilization,Carbohydrate utilization
+MOS,maltooligosaccharides utilization,Carbohydrate utilization
+Mtl,mannitol utilization,Carbohydrate utilization
+MurNac,N-acetylmuramic acid utilization,Carbohydrate utilization
+Neu5Ac,N-acetylneuraminate utilization,Carbohydrate utilization
+PsiLys,psicoselysine utilization,Carbohydrate utilization
+RFO,raffinose family oligosaccharides utilization,Carbohydrate utilization
+Rha,rhamnose utilization,Carbohydrate utilization
+Rhi,rhamnogalacturonides utilization,Carbohydrate utilization
+Rib,ribose utilization,Carbohydrate utilization
+ROS,rhamnose oligosaccharide utilization,Carbohydrate utilization
+Rtl,ribitol utilization,Carbohydrate utilization
+Scr,sucrose utilization,Carbohydrate utilization
+Sor,sorbose utilization,Carbohydrate utilization
+Stl,sorbitol utilization,Carbohydrate utilization
+Tag,tagatose utilization,Carbohydrate utilization
+Tre,trehalose utilization,Carbohydrate utilization
+XOS,xylooligosaccharides utilization,Carbohydrate utilization
+Xtl,xylitol utilization,Carbohydrate utilization
+Xyl,xylose utilization,Carbohydrate utilization
+BGL12,"1,2-beta-oligoglucan utilization",Carbohydrate utilization
+FL,2'FL and 3FL utilization,Carbohydrate utilization
+AR,arabinan degradation,Carbohydrate utilization
+AX,arabinoxylan degradation,Carbohydrate utilization
+AXOS,arabinoxylooligosaccharide utilization,Carbohydrate utilization
+Cld,cellobiose and cellodextrin utilization,Carbohydrate utilization
+DFA,difructose dianhydride utilization (production),Carbohydrate utilization
+GalAf,galactosylarabinose utilization,Carbohydrate utilization
+GmOS,glucomannan oligosaccharide utilization,Carbohydrate utilization
+GA,gum arabic degradation,Carbohydrate utilization
+HRGP,hydroxyproline-rich glycoprotein oligoarabinofuranoside degradation,Carbohydrate utilization
+LDFT,LDFT utilization,Carbohydrate utilization
+LNFPI,LNFP I utilization,Carbohydrate utilization
+LNnT,LNnT utilization,Carbohydrate utilization
+LNT,LNT utilization,Carbohydrate utilization
+lcFOS,long-chain fructooligosaccharide utilization,Carbohydrate utilization
+lcHMO,long-chain HMO utilization ,Carbohydrate utilization
+Mlz,melezitose utilization,Carbohydrate utilization
+Muc,mucin O-glycan degradation,Carbohydrate utilization
+GlcNAc6S,N-acetylglucosamine-6-sulfate utilization,Carbohydrate utilization
+Ncore,N-glycan core utilization,Carbohydrate utilization
+Nglyc,N-glycan utilization,Carbohydrate utilization
+IMO,panose and isomaltooligosaccharide utilization,Carbohydrate utilization
+RST,resistant starch degradation,Carbohydrate utilization
+SL,sialyllactose utilization,Carbohydrate utilization
+ST,starch degradation,Carbohydrate utilization
+Tan,T antigen degradation,Carbohydrate utilization
+AGI,type I galactan and arabinogalactan degradation,Carbohydrate utilization
+AGII,type II arabinogalactan degradation,Carbohydrate utilization
+XL,xylan degradation,Carbohydrate utilization
+XGL,xyloglucan degradation,Carbohydrate utilization
